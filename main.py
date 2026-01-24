@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from yandex_disk import YandexDiskClient
 from telegram_publisher import TelegramPublisher
 
-# Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -21,10 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    """Основная функция для поиска и публикации фото"""
-    
     try:
-        # Получаем токены из переменных окружения
         yandex_token = os.getenv('YANDEX_DISK_TOKEN')
         telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
         telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID')
@@ -34,25 +30,20 @@ def main():
             logger.error("Требуются: YANDEX_DISK_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID")
             sys.exit(1)
         
-        # Инициализируем клиенты
         logger.info("🚀 Инициализация клиентов...")
         yandex = YandexDiskClient(yandex_token)
         telegram = TelegramPublisher(telegram_token, telegram_chat_id)
         
-        # Получаем текущую дату (день и месяц) с UTC timezone
         today = datetime.now(timezone.utc)
         target_day = today.day
         target_month = today.month
         
         logger.info(f"🔍 Ищем фото за {target_day}.{target_month:02d} из прошлых лет...")
         
-        # Ищем фотографии
         photos = yandex.find_photos_by_date(target_day, target_month)
         
         if not photos:
             logger.info(f"📭 Фотографий за {target_day}.{target_month:02d} не найдено")
-            
-            # Отправляем сообщение в группу
             message = f"📅 {target_day}.{target_month:02d}\n\nК сожалению, на эту дату фотографий в архиве не найдено 😔"
             success = telegram.send_message(message)
             
@@ -65,7 +56,6 @@ def main():
         
         logger.info(f"✅ Найдено {len(photos)} фотографий")
         
-        # Группируем по годам
         photos_by_year = {}
         for photo in photos:
             year = photo['year']
@@ -73,26 +63,29 @@ def main():
                 photos_by_year[year] = []
             photos_by_year[year].append(photo)
         
-        logger.info(f"📊 Фото распределены по {len(photos_by_year)} годам")
+        years_count = len(photos_by_year)
+        logger.info(f"📊 Фото распределены по {years_count} годам")
         
-        # Публикуем фотографии
-        all_success = True
+        if years_count <= 3:
+            photos_per_year = 3
+        elif years_count <= 5:
+            photos_per_year = 2
+        else:
+            photos_per_year = 1
+        
+        selected_photos = []
         for year in sorted(photos_by_year.keys()):
-            year_photos = photos_by_year[year]
-            logger.info(f"📤 Публикуем {len(year_photos)} фото за {year} год...")
-            
-            success = telegram.publish_photos(
-                photos=year_photos,
-                date_str=f"{target_day}.{target_month:02d}.{year}"
-            )
-            
-            if not success:
-                logger.error(f"❌ Ошибка при публикации фото за {year} год")
-                all_success = False
-            else:
-                logger.info(f"✅ Фото за {year} год опубликованы")
+            year_photos = photos_by_year[year][:photos_per_year]
+            selected_photos.extend(year_photos)
+            if len(selected_photos) >= 10:
+                selected_photos = selected_photos[:10]
+                break
         
-        if all_success:
+        logger.info(f"📤 Публикуем {len(selected_photos)} фото (по {photos_per_year} из каждого года)")
+        
+        success = telegram.publish_photos(selected_photos, f"{target_day}.{target_month:02d}")
+        
+        if success:
             logger.info("✨ Публикация успешно завершена!")
         else:
             logger.warning("⚠️ Публикация завершена с ошибками")
@@ -103,7 +96,6 @@ def main():
         sys.exit(1)
     except Exception as e:
         logger.error(f"❌ Критическая ошибка: {e}", exc_info=True)
-        # Пытаемся отправить уведомление об ошибке в Telegram
         try:
             if 'telegram' in locals():
                 telegram.send_message(f"⚠️ Ошибка в боте воспоминаний:\n\n{str(e)}")
