@@ -1,0 +1,70 @@
+name: Publish Daily Memories
+
+on:
+  # Запуск по расписанию (UTC время)
+  schedule:
+    # Утро: 6:00 UTC (9:00 МСК)
+    - cron: '0 6 * * *'
+    # День: 12:00 UTC (15:00 МСК)
+    - cron: '0 12 * * *'
+    # Вечер: 18:00 UTC (21:00 МСК)
+    - cron: '0 18 * * *'
+  
+  # Возможность запустить вручную
+  workflow_dispatch:
+
+jobs:
+  publish-memories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # ✅ Добавлен timeout для job
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      # ✅ Добавлено кеширование pip пакетов
+      - name: Cache pip packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Run memories bot
+        env:
+          YANDEX_DISK_TOKEN: ${{ secrets.YANDEX_DISK_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python main.py
+      
+      # ✅ Сохраняем логи всегда (не только при failure)
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bot-logs-${{ github.run_id }}
+          path: |
+            *.log
+          retention-days: 7
+      
+      # ✅ Отправляем уведомление об ошибке (опционально, требует настройки)
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ Workflow failed! Check logs in artifacts."
+          # Можно добавить отправку уведомления в Telegram:
+          # curl -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+          #   -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+          #   -d "text=⚠️ GitHub Actions: Ошибка в боте воспоминаний! Проверьте логи."
