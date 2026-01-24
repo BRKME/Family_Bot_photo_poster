@@ -1,22 +1,15 @@
 name: Publish Daily Memories
 
 on:
-  # Запуск по расписанию (UTC время)
   schedule:
-    # Утро: 6:00 UTC (9:00 МСК)
-    - cron: '0 6 * * *'
-    # День: 12:00 UTC (15:00 МСК)
-    - cron: '0 12 * * *'
-    # Вечер: 18:00 UTC (21:00 МСК)
-    - cron: '0 18 * * *'
+    - cron: '0 9 * * *'
   
-  # Возможность запустить вручную
   workflow_dispatch:
 
 jobs:
   publish-memories:
     runs-on: ubuntu-latest
-    timeout-minutes: 10  # ✅ Добавлен timeout для job
+    timeout-minutes: 10
     
     steps:
       - name: Checkout repository
@@ -27,7 +20,6 @@ jobs:
         with:
           python-version: '3.11'
       
-      # ✅ Добавлено кеширование pip пакетов
       - name: Cache pip packages
         uses: actions/cache@v3
         with:
@@ -49,7 +41,6 @@ jobs:
         run: |
           python main.py
       
-      # ✅ Сохраняем логи всегда (не только при failure)
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -59,12 +50,7 @@ jobs:
             *.log
           retention-days: 7
       
-      # ✅ Отправляем уведомление об ошибке (опционально, требует настройки)
       - name: Notify on failure
         if: failure()
         run: |
           echo "❌ Workflow failed! Check logs in artifacts."
-          # Можно добавить отправку уведомления в Telegram:
-          # curl -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-          #   -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
-          #   -d "text=⚠️ GitHub Actions: Ошибка в боте воспоминаний! Проверьте логи."
