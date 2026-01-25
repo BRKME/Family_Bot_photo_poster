@@ -4,7 +4,7 @@
 import os
 import sys
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from yandex_disk import YandexDiskClient
 from telegram_publisher import TelegramPublisher
 
@@ -34,10 +34,13 @@ def main():
         yandex = YandexDiskClient(yandex_token)
         telegram = TelegramPublisher(telegram_token, telegram_chat_id)
         
-        today = datetime.now(timezone.utc)
+        # Московское время (UTC+3)
+        moscow_tz = timezone(timedelta(hours=3))
+        today = datetime.now(moscow_tz)
         target_day = today.day
         target_month = today.month
         
+        logger.info(f"🕐 Московское время: {today.strftime('%Y-%m-%d %H:%M:%S')} МСК")
         logger.info(f"🔍 Ищем фото за {target_day}.{target_month:02d} из прошлых лет...")
         
         photos = yandex.find_photos_by_date(target_day, target_month)
