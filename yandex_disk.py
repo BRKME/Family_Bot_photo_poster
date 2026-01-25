@@ -64,12 +64,12 @@ class YandexDiskClient:
                     logger.info(f"📊 Больше файлов нет (обработано {total_processed})")
                     break
                 
-                total_processed += len(items)
-                logger.info(f"📊 Обработано {total_processed} файлов...")
-                
-                if total_processed <= 5:
+                if offset == 0:
                     for item in items[:5]:
                         logger.info(f"📁 Пример: {item.get('name', 'N/A')} → путь: {item.get('path', 'N/A')}")
+                
+                total_processed += len(items)
+                logger.info(f"📊 Обработано {total_processed} файлов...")
                 
                 for item in items:
                     photo_date = self._extract_date(item)
