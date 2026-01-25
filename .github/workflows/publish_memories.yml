@@ -2,7 +2,7 @@ name: Publish Daily Memories
 
 on:
   schedule:
-    - cron: '0 9 * * *'
+    - cron: '0 9 * * *'  # 12:00 МСК (UTC+3)
   
   workflow_dispatch:
 
