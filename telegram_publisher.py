@@ -6,6 +6,7 @@ from typing import List, Dict
 import time
 import html
 import logging
+import random
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -16,6 +17,27 @@ class TelegramPublisher:
     REQUEST_TIMEOUT = 30
     MAX_CAPTION_LENGTH = 1024
     RATE_LIMIT_INTERVAL = 0.05
+    
+    FAMILY_NAMES = ["Мама", "Марта", "Аркаша", "Папа", "Лилу"]
+    
+    RANDOM_QUESTIONS = [
+        "Кто вспомнит, где это было? 🤔",
+        "Узнаёте место? 🗺️",
+        "Помните этот день? 📸",
+        "Что за событие? 🎉",
+        "Где мы тут были? 🌍",
+        "Что за место? 🏛️",
+    ]
+    
+    QUESTIONS_WITH_NAMES = [
+        "Узнаёте {name} на фото? 😊",
+        "Где были {name1} и {name2}? 🚗",
+        "Помните эту поездку с {name}? 🌍",
+        "Кто был вместе с {name}? 👥",
+        "Что делала {name}? 🤔",
+        "{name}, помнишь этот момент? 📸",
+        "Где это {name1} с {name2}? 🗺️",
+    ]
     
     def __init__(self, token: str, chat_id: str):
         if not token or len(token) < 20:
@@ -29,6 +51,21 @@ class TelegramPublisher:
         
         self._masked_token = f"{token[:10]}...{token[-4:]}" if len(token) > 14 else "***"
         logger.info(f"✅ TelegramPublisher инициализирован (токен: {self._masked_token}, chat: {chat_id})")
+    
+    def _get_random_question(self) -> str:
+        use_names = random.choice([True, False])
+        
+        if use_names:
+            question_template = random.choice(self.QUESTIONS_WITH_NAMES)
+            
+            if '{name1}' in question_template and '{name2}' in question_template:
+                names = random.sample(self.FAMILY_NAMES, 2)
+                return question_template.format(name1=names[0], name2=names[1])
+            else:
+                name = random.choice(self.FAMILY_NAMES)
+                return question_template.format(name=name)
+        else:
+            return random.choice(self.RANDOM_QUESTIONS)
     
     def _rate_limit(self):
         if self.last_request_time:
@@ -101,7 +138,8 @@ class TelegramPublisher:
         url = self.BASE_URL.format(token=self.token, method='sendPhoto')
         
         year = photo.get('year', '')
-        full_caption = f"📅 {caption}\n\n{year} год" if year else f"📅 {caption}"
+        random_question = self._get_random_question()
+        full_caption = f"📅 {caption}\n\n{random_question}\n\n{year} год" if year else f"📅 {caption}\n\n{random_question}"
         
         data = {
             'chat_id': self.chat_id,
@@ -140,7 +178,8 @@ class TelegramPublisher:
             year = photo.get('year', '')
             
             if idx == 0 and caption:
-                photo_caption = f"📅 {caption}\n\n{year}"
+                random_question = self._get_random_question()
+                photo_caption = f"📅 {caption}\n\n{random_question}\n\n{year}"
             else:
                 photo_caption = f"{year}"
             
