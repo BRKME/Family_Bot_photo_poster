@@ -35,6 +35,8 @@ class YandexDiskClient:
         
         logger.info(f"🔍 Начинаем поиск фото за {day}.{month:02d}")
         
+        self._list_photo_folders()
+        
         photos = []
         photos.extend(self._search_in_files_api(day, month))
         photos.extend(self._search_in_photounlim(day, month))
@@ -45,6 +47,28 @@ class YandexDiskClient:
         logger.info(f"✅ Итого найдено {len(photos)} уникальных фото за {day}.{month:02d}")
         
         return photos
+    
+    def _list_photo_folders(self):
+        logger.info(f"📂 Проверяем доступные папки...")
+        
+        paths_to_check = ['/', '/photounlim', '/Фотокамера', '/Camera Uploads']
+        
+        for path in paths_to_check:
+            try:
+                url = f'{self.BASE_URL}/resources'
+                params = {'path': path, 'limit': 1}
+                
+                response = requests.get(url, headers=self.headers, params=params, timeout=10)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    logger.info(f"✅ Доступна: {path} (тип: {data.get('type', 'unknown')})")
+                elif response.status_code == 404:
+                    logger.debug(f"❌ Не найдена: {path}")
+                elif response.status_code == 403:
+                    logger.warning(f"🔒 Нет доступа: {path}")
+            except Exception as e:
+                logger.debug(f"⚠️ Ошибка проверки {path}: {e}")
     
     def _search_in_files_api(self, day: int, month: int) -> List[Dict]:
         photos = []
@@ -88,6 +112,8 @@ class YandexDiskClient:
                         if not download_url:
                             logger.warning(f"⚠️ Нет URL для скачивания: {item['name']}")
                             continue
+                        
+                        logger.info(f"✅ Найдено: {item['name']} → {photo_date.strftime('%Y-%m-%d')}")
                         
                         photos.append({
                             'name': item['name'],
@@ -142,7 +168,13 @@ class YandexDiskClient:
                 )
                 
                 if response.status_code == 404:
-                    logger.info(f"📁 Фотопоток не найден")
+                    logger.warning(f"⚠️ Папка /photounlim не найдена (404)")
+                    logger.info(f"💡 Возможно нужны расширенные права для доступа к Фотопотоку")
+                    break
+                
+                if response.status_code == 403:
+                    logger.warning(f"⚠️ Нет доступа к /photounlim (403)")
+                    logger.info(f"💡 Требуется право 'cloud_api:disk.app_folder' или 'cloud_api:disk.write'")
                     break
                 
                 response.raise_for_status()
