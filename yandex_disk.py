@@ -67,6 +67,10 @@ class YandexDiskClient:
                 total_processed += len(items)
                 logger.info(f"📊 Обработано {total_processed} файлов...")
                 
+                if total_processed <= 5:
+                    for item in items[:5]:
+                        logger.info(f"📁 Пример: {item.get('name', 'N/A')} → путь: {item.get('path', 'N/A')}")
+                
                 for item in items:
                     photo_date = self._extract_date(item)
                     
@@ -76,6 +80,8 @@ class YandexDiskClient:
                         if not download_url:
                             logger.warning(f"⚠️ Нет URL для скачивания: {item['name']}")
                             continue
+                        
+                        logger.info(f"✅ Найдено совпадение: {item['name']} → {photo_date.strftime('%Y-%m-%d')}")
                         
                         photos.append({
                             'name': item['name'],
