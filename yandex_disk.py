@@ -41,6 +41,8 @@ class YandexDiskClient:
         total_processed = 0
         self._debug_counter = 0
         matches_found = 0
+        extensions_seen = {}
+        photounlim_count = 0
         
         logger.info(f"🔍 Начинаем поиск фото за {day}.{month:02d}")
         
@@ -76,6 +78,12 @@ class YandexDiskClient:
                 logger.info(f"📊 Обработано {total_processed} файлов...")
                 
                 for item in items:
+                    ext = item.get('name', '').split('.')[-1].upper() if '.' in item.get('name', '') else 'NO_EXT'
+                    extensions_seen[ext] = extensions_seen.get(ext, 0) + 1
+                    
+                    if 'photounlim' in item.get('path', ''):
+                        photounlim_count += 1
+                    
                     photo_date = self._extract_date(item)
                     
                     if photo_date and photo_date.day == day and photo_date.month == month:
@@ -113,7 +121,12 @@ class YandexDiskClient:
                 break
         
         photos.sort(key=lambda x: x['year'])
+        
         logger.info(f"📊 Статистика: найдено {matches_found} файлов с датой {day}.{month:02d}, добавлено {len(photos)} фото (обработано {total_processed} файлов)")
+        
+        top_extensions = sorted(extensions_seen.items(), key=lambda x: x[1], reverse=True)[:10]
+        logger.info(f"📊 Топ расширений: {', '.join([f'{ext}={count}' for ext, count in top_extensions])}")
+        logger.info(f"📊 JPEG файлы: {extensions_seen.get('JPEG', 0)}, файлов в photounlim: {photounlim_count}")
         
         return photos
     
