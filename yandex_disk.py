@@ -40,6 +40,7 @@ class YandexDiskClient:
         limit = 1000
         total_processed = 0
         self._debug_counter = 0
+        matches_found = 0
         
         logger.info(f"🔍 Начинаем поиск фото за {day}.{month:02d}")
         
@@ -78,13 +79,14 @@ class YandexDiskClient:
                     photo_date = self._extract_date(item)
                     
                     if photo_date and photo_date.day == day and photo_date.month == month:
+                        matches_found += 1
+                        logger.info(f"🔍 #{matches_found} Файл с нужной датой: {item['name']} → {photo_date.strftime('%Y-%m-%d')} (путь: {item.get('path', 'N/A')})")
+                        
                         download_url = item.get('file')
                         
                         if not download_url:
                             logger.warning(f"⚠️ Нет URL для скачивания: {item['name']}")
                             continue
-                        
-                        logger.info(f"✅ Найдено совпадение: {item['name']} → {photo_date.strftime('%Y-%m-%d')} из {item.get('path', 'N/A')}")
                         
                         photos.append({
                             'name': item['name'],
@@ -111,7 +113,7 @@ class YandexDiskClient:
                 break
         
         photos.sort(key=lambda x: x['year'])
-        logger.info(f"✅ Найдено {len(photos)} фото за {day}.{month:02d} из {total_processed} файлов")
+        logger.info(f"📊 Статистика: найдено {matches_found} файлов с датой {day}.{month:02d}, добавлено {len(photos)} фото (обработано {total_processed} файлов)")
         
         return photos
     
@@ -187,7 +189,7 @@ class YandexDiskClient:
             r'\b(\d{2})\.(\d{2})\.(\d{4})\b',
         ]
         
-        for pattern in patterns:
+        for idx, pattern in enumerate(patterns):
             match = re.search(pattern, filename)
             if match:
                 try:
@@ -201,8 +203,15 @@ class YandexDiskClient:
                     current_year = datetime.now().year
                     if 1990 <= date.year <= current_year:
                         return date
+                    else:
+                        if self._debug_counter < self._max_debug:
+                            logger.debug(f"⚠️ {filename}: год {date.year} вне диапазона 1990-{current_year}")
+                            self._debug_counter += 1
                     
-                except (ValueError, IndexError):
+                except (ValueError, IndexError) as e:
+                    if self._debug_counter < self._max_debug:
+                        logger.debug(f"⚠️ {filename}: ошибка парсинга даты из паттерна {idx}: {e}")
+                        self._debug_counter += 1
                     continue
         
         return None
