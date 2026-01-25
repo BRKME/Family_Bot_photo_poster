@@ -39,6 +39,7 @@ class YandexDiskClient:
         
         photos = []
         photos.extend(self._search_in_files_api(day, month))
+        photos.extend(self._search_in_folder('/Фотокамера', day, month))
         photos.extend(self._search_in_photounlim(day, month))
         
         photos = list({p['path']: p for p in photos}.values())
@@ -225,6 +226,87 @@ class YandexDiskClient:
                 break
         
         logger.info(f"✅ Фотопоток: найдено {len(photos)} фото")
+        return photos
+    
+    def _search_in_folder(self, folder_path: str, day: int, month: int) -> List[Dict]:
+        logger.info(f"🔍 Поиск в папке {folder_path}...")
+        
+        photos = []
+        offset = 0
+        limit = 1000
+        total_processed = 0
+        
+        while True:
+            url = f'{self.BASE_URL}/resources'
+            params = {
+                'path': folder_path,
+                'limit': limit,
+                'offset': offset,
+                'fields': 'items.name,items.path,items.file,items.created,items.modified,items.exif,items.size,items.type'
+            }
+            
+            try:
+                response = requests.get(
+                    url,
+                    headers=self.headers,
+                    params=params,
+                    timeout=self.REQUEST_TIMEOUT
+                )
+                
+                if response.status_code == 404:
+                    logger.warning(f"⚠️ Папка {folder_path} не найдена")
+                    break
+                
+                response.raise_for_status()
+                data = response.json()
+                
+                items = data.get('_embedded', {}).get('items', [])
+                if not items:
+                    break
+                
+                total_processed += len(items)
+                logger.info(f"📊 {folder_path}: обработано {total_processed} файлов...")
+                
+                for item in items:
+                    if item.get('type') != 'file':
+                        continue
+                    
+                    photo_date = self._extract_date(item)
+                    
+                    if photo_date and photo_date.day == day and photo_date.month == month:
+                        download_url = item.get('file')
+                        
+                        if not download_url:
+                            logger.warning(f"⚠️ Нет URL для скачивания: {item['name']}")
+                            continue
+                        
+                        logger.info(f"✅ {folder_path}: {item['name']} → {photo_date.strftime('%Y-%m-%d')}")
+                        
+                        photos.append({
+                            'name': item['name'],
+                            'path': item['path'],
+                            'download_url': download_url,
+                            'created': item.get('created'),
+                            'modified': item.get('modified'),
+                            'date': photo_date,
+                            'year': photo_date.year,
+                            'size': item.get('size', 0)
+                        })
+                
+                if len(items) < limit:
+                    logger.info(f"✅ {folder_path}: обработано {total_processed} файлов")
+                    break
+                
+                offset += limit
+                
+            except requests.exceptions.Timeout:
+                logger.error(f"⏱️ Timeout при запросе к {folder_path}")
+                break
+            except requests.exceptions.RequestException as e:
+                logger.error(f"❌ Ошибка при запросе к {folder_path}: {e}")
+                break
+        
+        logger.info(f"✅ {folder_path}: найдено {len(photos)} фото")
         return photos
     
     def _extract_date(self, item: Dict) -> Optional[datetime]:
