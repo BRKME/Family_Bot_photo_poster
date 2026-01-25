@@ -7,6 +7,7 @@ import time
 import html
 import logging
 import random
+import json
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -180,6 +181,7 @@ class TelegramPublisher:
             if idx == 0 and caption:
                 random_question = self._get_random_question()
                 photo_caption = f"📅 {caption}\n\n{random_question}\n\n{year}"
+                logger.info(f"📝 Подпись первого фото: '{photo_caption}'")
             else:
                 photo_caption = f"{year}"
             
@@ -197,11 +199,11 @@ class TelegramPublisher:
         
         data = {
             'chat_id': self.chat_id,
-            'media': media
+            'media': json.dumps(media)
         }
         
         try:
-            response = requests.post(url, json=data, timeout=self.REQUEST_TIMEOUT)
+            response = requests.post(url, data=data, timeout=self.REQUEST_TIMEOUT)
             response.raise_for_status()
             logger.info(f"✅ Отправлена медиа-группа из {len(media)} фото")
             return True
