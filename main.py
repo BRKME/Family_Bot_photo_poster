@@ -9,7 +9,7 @@ from yandex_disk import YandexDiskClient
 from telegram_publisher import TelegramPublisher
 
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
