@@ -26,8 +26,6 @@ class YandexDiskClient:
         
         self._masked_token = f"{token[:10]}...{token[-4:]}" if len(token) > 14 else "***"
         logger.info(f"✅ YandexDiskClient инициализирован (токен: {self._masked_token})")
-        self._debug_counter = 0
-        self._max_debug = 20
     
     def find_photos_by_date(self, day: int, month: int) -> List[Dict]:
         if not 1 <= day <= 31:
@@ -35,16 +33,26 @@ class YandexDiskClient:
         if not 1 <= month <= 12:
             raise ValueError(f"Месяц должен быть 1-12, получено: {month}")
         
+        logger.info(f"🔍 Начинаем поиск фото за {day}.{month:02d}")
+        
+        photos = []
+        photos.extend(self._search_in_files_api(day, month))
+        photos.extend(self._search_in_photounlim(day, month))
+        
+        photos = list({p['path']: p for p in photos}.values())
+        photos.sort(key=lambda x: x['year'])
+        
+        logger.info(f"✅ Итого найдено {len(photos)} уникальных фото за {day}.{month:02d}")
+        
+        return photos
+    
+    def _search_in_files_api(self, day: int, month: int) -> List[Dict]:
         photos = []
         offset = 0
         limit = 1000
         total_processed = 0
-        self._debug_counter = 0
-        matches_found = 0
-        extensions_seen = {}
-        photounlim_count = 0
         
-        logger.info(f"🔍 Начинаем поиск фото за {day}.{month:02d}")
+        logger.info(f"🔍 Поиск в основных папках...")
         
         while True:
             url = f'{self.BASE_URL}/resources/files'
@@ -55,7 +63,6 @@ class YandexDiskClient:
             }
             
             try:
-                logger.debug(f"📡 Запрос к API: offset={offset}, limit={limit}")
                 response = requests.get(
                     url, 
                     headers=self.headers, 
@@ -67,29 +74,15 @@ class YandexDiskClient:
                 
                 items = data.get('items', [])
                 if not items:
-                    logger.info(f"📊 Больше файлов нет (обработано {total_processed})")
                     break
-                
-                if offset == 0:
-                    for item in items[:5]:
-                        logger.info(f"📁 Пример: {item.get('name', 'N/A')} → путь: {item.get('path', 'N/A')}")
                 
                 total_processed += len(items)
                 logger.info(f"📊 Обработано {total_processed} файлов...")
                 
                 for item in items:
-                    ext = item.get('name', '').split('.')[-1].upper() if '.' in item.get('name', '') else 'NO_EXT'
-                    extensions_seen[ext] = extensions_seen.get(ext, 0) + 1
-                    
-                    if 'photounlim' in item.get('path', ''):
-                        photounlim_count += 1
-                    
                     photo_date = self._extract_date(item)
                     
                     if photo_date and photo_date.day == day and photo_date.month == month:
-                        matches_found += 1
-                        logger.info(f"🔍 #{matches_found} Файл с нужной датой: {item['name']} → {photo_date.strftime('%Y-%m-%d')} (путь: {item.get('path', 'N/A')})")
-                        
                         download_url = item.get('file')
                         
                         if not download_url:
@@ -108,7 +101,7 @@ class YandexDiskClient:
                         })
                 
                 if len(items) < limit:
-                    logger.info(f"✅ Достигнута последняя страница (всего обработано {total_processed})")
+                    logger.info(f"✅ Основные папки: обработано {total_processed} файлов")
                     break
                 
                 offset += limit
@@ -120,60 +113,112 @@ class YandexDiskClient:
                 logger.error(f"❌ Ошибка при запросе к Яндекс.Диску: {e}")
                 break
         
-        photos.sort(key=lambda x: x['year'])
+        logger.info(f"✅ Основные папки: найдено {len(photos)} фото")
+        return photos
+    
+    def _search_in_photounlim(self, day: int, month: int) -> List[Dict]:
+        logger.info(f"🔍 Поиск в Фотопотоке...")
         
-        logger.info(f"📊 Статистика: найдено {matches_found} файлов с датой {day}.{month:02d}, добавлено {len(photos)} фото (обработано {total_processed} файлов)")
+        photos = []
+        offset = 0
+        limit = 1000
+        total_processed = 0
         
-        top_extensions = sorted(extensions_seen.items(), key=lambda x: x[1], reverse=True)[:10]
-        logger.info(f"📊 Топ расширений: {', '.join([f'{ext}={count}' for ext, count in top_extensions])}")
-        logger.info(f"📊 JPEG файлы: {extensions_seen.get('JPEG', 0)}, файлов в photounlim: {photounlim_count}")
+        while True:
+            url = f'{self.BASE_URL}/resources'
+            params = {
+                'path': '/photounlim',
+                'limit': limit,
+                'offset': offset,
+                'fields': 'items.name,items.path,items.file,items.created,items.modified,items.exif,items.size,items.type'
+            }
+            
+            try:
+                response = requests.get(
+                    url,
+                    headers=self.headers,
+                    params=params,
+                    timeout=self.REQUEST_TIMEOUT
+                )
+                
+                if response.status_code == 404:
+                    logger.info(f"📁 Фотопоток не найден")
+                    break
+                
+                response.raise_for_status()
+                data = response.json()
+                
+                items = data.get('_embedded', {}).get('items', [])
+                if not items:
+                    break
+                
+                total_processed += len(items)
+                logger.info(f"📊 Фотопоток: обработано {total_processed} файлов...")
+                
+                for item in items:
+                    if item.get('type') != 'file':
+                        continue
+                    
+                    photo_date = self._extract_date(item)
+                    
+                    if photo_date and photo_date.day == day and photo_date.month == month:
+                        download_url = item.get('file')
+                        
+                        if not download_url:
+                            logger.warning(f"⚠️ Нет URL для скачивания: {item['name']}")
+                            continue
+                        
+                        photos.append({
+                            'name': item['name'],
+                            'path': item['path'],
+                            'download_url': download_url,
+                            'created': item.get('created'),
+                            'modified': item.get('modified'),
+                            'date': photo_date,
+                            'year': photo_date.year,
+                            'size': item.get('size', 0)
+                        })
+                
+                if len(items) < limit:
+                    logger.info(f"✅ Фотопоток: обработано {total_processed} файлов")
+                    break
+                
+                offset += limit
+                
+            except requests.exceptions.Timeout:
+                logger.error(f"⏱️ Timeout при запросе к Фотопотоку")
+                break
+            except requests.exceptions.RequestException as e:
+                logger.error(f"❌ Ошибка при запросе к Фотопотоку: {e}")
+                break
         
+        logger.info(f"✅ Фотопоток: найдено {len(photos)} фото")
         return photos
     
     def _extract_date(self, item: Dict) -> Optional[datetime]:
-        name = item.get('name', 'unknown')
-        show_debug = self._debug_counter < self._max_debug
-        
         exif = item.get('exif', {})
         if exif.get('date_time'):
             try:
-                date = datetime.strptime(exif['date_time'], '%Y:%m:%d %H:%M:%S')
-                if show_debug:
-                    logger.debug(f"✅ {name}: EXIF → {date.strftime('%Y-%m-%d')}")
-                    self._debug_counter += 1
-                return date
+                return datetime.strptime(exif['date_time'], '%Y:%m:%d %H:%M:%S')
             except (ValueError, TypeError):
                 pass
         
         date_from_path = self._extract_date_from_path(item.get('path', ''))
         if date_from_path:
-            if show_debug:
-                logger.debug(f"✅ {name}: Path → {date_from_path.strftime('%Y-%m-%d')}")
-                self._debug_counter += 1
             return date_from_path
         
-        date_from_name = self._extract_date_from_filename(name)
+        date_from_name = self._extract_date_from_filename(item.get('name', ''))
         if date_from_name:
-            if show_debug:
-                logger.debug(f"✅ {name}: Filename → {date_from_name.strftime('%Y-%m-%d')}")
-                self._debug_counter += 1
             return date_from_name
         
         for date_field in ['created', 'modified']:
             if item.get(date_field):
                 try:
                     date_str = item[date_field].split('+')[0].split('.')[0].replace('Z', '')
-                    date = datetime.fromisoformat(date_str)
-                    if show_debug:
-                        logger.debug(f"✅ {name}: {date_field} → {date.strftime('%Y-%m-%d')}")
-                        self._debug_counter += 1
-                    return date
+                    return datetime.fromisoformat(date_str)
                 except (ValueError, TypeError):
                     pass
         
-        if show_debug:
-            logger.debug(f"⚠️ {name}: дата не найдена")
-            self._debug_counter += 1
         return None
     
     def _extract_date_from_path(self, path: str) -> Optional[datetime]:
@@ -202,7 +247,7 @@ class YandexDiskClient:
             r'\b(\d{2})\.(\d{2})\.(\d{4})\b',
         ]
         
-        for idx, pattern in enumerate(patterns):
+        for pattern in patterns:
             match = re.search(pattern, filename)
             if match:
                 try:
@@ -216,15 +261,8 @@ class YandexDiskClient:
                     current_year = datetime.now().year
                     if 1990 <= date.year <= current_year:
                         return date
-                    else:
-                        if self._debug_counter < self._max_debug:
-                            logger.debug(f"⚠️ {filename}: год {date.year} вне диапазона 1990-{current_year}")
-                            self._debug_counter += 1
                     
-                except (ValueError, IndexError) as e:
-                    if self._debug_counter < self._max_debug:
-                        logger.debug(f"⚠️ {filename}: ошибка парсинга даты из паттерна {idx}: {e}")
-                        self._debug_counter += 1
+                except (ValueError, IndexError):
                     continue
         
         return None
