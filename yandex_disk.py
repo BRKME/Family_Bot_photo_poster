@@ -26,6 +26,8 @@ class YandexDiskClient:
         
         self._masked_token = f"{token[:10]}...{token[-4:]}" if len(token) > 14 else "***"
         logger.info(f"✅ YandexDiskClient инициализирован (токен: {self._masked_token})")
+        self._debug_counter = 0
+        self._max_debug = 20
     
     def find_photos_by_date(self, day: int, month: int) -> List[Dict]:
         if not 1 <= day <= 31:
@@ -37,6 +39,7 @@ class YandexDiskClient:
         offset = 0
         limit = 1000
         total_processed = 0
+        self._debug_counter = 0
         
         logger.info(f"🔍 Начинаем поиск фото за {day}.{month:02d}")
         
@@ -81,7 +84,7 @@ class YandexDiskClient:
                             logger.warning(f"⚠️ Нет URL для скачивания: {item['name']}")
                             continue
                         
-                        logger.info(f"✅ Найдено совпадение: {item['name']} → {photo_date.strftime('%Y-%m-%d')}")
+                        logger.info(f"✅ Найдено совпадение: {item['name']} → {photo_date.strftime('%Y-%m-%d')} из {item.get('path', 'N/A')}")
                         
                         photos.append({
                             'name': item['name'],
@@ -113,29 +116,49 @@ class YandexDiskClient:
         return photos
     
     def _extract_date(self, item: Dict) -> Optional[datetime]:
+        name = item.get('name', 'unknown')
+        show_debug = self._debug_counter < self._max_debug
+        
         exif = item.get('exif', {})
         if exif.get('date_time'):
             try:
-                return datetime.strptime(exif['date_time'], '%Y:%m:%d %H:%M:%S')
+                date = datetime.strptime(exif['date_time'], '%Y:%m:%d %H:%M:%S')
+                if show_debug:
+                    logger.debug(f"✅ {name}: EXIF → {date.strftime('%Y-%m-%d')}")
+                    self._debug_counter += 1
+                return date
             except (ValueError, TypeError):
                 pass
         
         date_from_path = self._extract_date_from_path(item.get('path', ''))
         if date_from_path:
+            if show_debug:
+                logger.debug(f"✅ {name}: Path → {date_from_path.strftime('%Y-%m-%d')}")
+                self._debug_counter += 1
             return date_from_path
         
-        date_from_name = self._extract_date_from_filename(item.get('name', ''))
+        date_from_name = self._extract_date_from_filename(name)
         if date_from_name:
+            if show_debug:
+                logger.debug(f"✅ {name}: Filename → {date_from_name.strftime('%Y-%m-%d')}")
+                self._debug_counter += 1
             return date_from_name
         
         for date_field in ['created', 'modified']:
             if item.get(date_field):
                 try:
                     date_str = item[date_field].split('+')[0].split('.')[0].replace('Z', '')
-                    return datetime.fromisoformat(date_str)
+                    date = datetime.fromisoformat(date_str)
+                    if show_debug:
+                        logger.debug(f"✅ {name}: {date_field} → {date.strftime('%Y-%m-%d')}")
+                        self._debug_counter += 1
+                    return date
                 except (ValueError, TypeError):
                     pass
         
+        if show_debug:
+            logger.debug(f"⚠️ {name}: дата не найдена")
+            self._debug_counter += 1
         return None
     
     def _extract_date_from_path(self, path: str) -> Optional[datetime]:
