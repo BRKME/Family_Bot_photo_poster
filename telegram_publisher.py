@@ -114,10 +114,18 @@ class TelegramPublisher:
         for i in range(0, len(photos), max_photos_per_group):
             photo_group = photos[i:i + max_photos_per_group]
             
+            # Отправляем текст перед первой группой фото
+            if i == 0:
+                random_question = self._get_random_question()
+                text_message = f"📅 {date_str}\n\n{random_question}"
+                if not self.send_message(text_message):
+                    logger.warning("⚠️ Не удалось отправить текстовое сообщение")
+                time.sleep(0.5)
+            
             if len(photo_group) == 1:
                 result = self._send_single_photo(photo_group[0], date_str)
             else:
-                result = self._send_media_group(photo_group, date_str if i == 0 else None)
+                result = self._send_media_group(photo_group, include_years=True)
             
             if not result:
                 success = False
@@ -128,7 +136,7 @@ class TelegramPublisher:
         
         return success
     
-    def _send_single_photo(self, photo: Dict, caption: str) -> bool:
+    def _send_single_photo(self, photo: Dict, date_str: str) -> bool:
         self._rate_limit()
         
         download_url = photo.get('download_url')
@@ -139,14 +147,12 @@ class TelegramPublisher:
         url = self.BASE_URL.format(token=self.token, method='sendPhoto')
         
         year = photo.get('year', '')
-        random_question = self._get_random_question()
-        full_caption = f"📅 {caption}\n\n{random_question}\n\n{year} год" if year else f"📅 {caption}\n\n{random_question}"
+        caption = f"{year} год" if year else ""
         
         data = {
             'chat_id': self.chat_id,
             'photo': download_url,
-            'caption': full_caption,
-            'parse_mode': 'HTML'
+            'caption': caption
         }
         
         try:
@@ -163,7 +169,7 @@ class TelegramPublisher:
                 logger.error(f"Status: {e.response.status_code}, Body: {e.response.text[:200]}")
             return False
     
-    def _send_media_group(self, photos: List[Dict], caption: str = None) -> bool:
+    def _send_media_group(self, photos: List[Dict], include_years: bool = True) -> bool:
         self._rate_limit()
         
         url = self.BASE_URL.format(token=self.token, method='sendMediaGroup')
@@ -177,13 +183,7 @@ class TelegramPublisher:
                 continue
             
             year = photo.get('year', '')
-            
-            if idx == 0 and caption:
-                random_question = self._get_random_question()
-                photo_caption = f"📅 {caption}\n\n{random_question}\n\n{year}"
-                logger.info(f"📝 Подпись первого фото: '{photo_caption}'")
-            else:
-                photo_caption = f"{year}"
+            photo_caption = str(year) if include_years and year else ""
             
             media_item = {
                 'type': 'photo',
