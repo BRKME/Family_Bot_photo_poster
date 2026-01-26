@@ -1,0 +1,10 @@
+name: Activate Schedule
+on: workflow_dispatch
+jobs:
+  activate:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "✅ Активация schedule для Publish Daily Memories..."
+          mkdir -p .github
+          echo "activated=true" > .github/schedule_active
