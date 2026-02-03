@@ -53,10 +53,18 @@ def main():
         # Поиск в первом Яндекс.Диске
         photos = yandex.find_photos_by_date(target_day, target_month)
         
+        # Помечаем источник
+        for photo in photos:
+            photo['source'] = 'disk_1'
+        
         # Поиск во втором Яндекс.Диске (если есть)
         if yandex_2:
             logger.info("🔍 Ищем фото во втором Яндекс.Диске...")
             photos_2 = yandex_2.find_photos_by_date(target_day, target_month)
+            
+            # Помечаем источник
+            for photo in photos_2:
+                photo['source'] = 'disk_2'
             
             # Объединяем результаты
             if photos_2:
@@ -114,13 +122,45 @@ def main():
         
         selected_photos = []
         for year in sorted(photos_by_year.keys()):
-            year_photos = photos_by_year[year][:photos_per_year]
-            selected_photos.extend(year_photos)
+            year_photos = photos_by_year[year]
+            
+            # Разделяем по источникам для равномерного выбора
+            disk1_photos = [p for p in year_photos if p.get('source') == 'disk_1']
+            disk2_photos = [p for p in year_photos if p.get('source') == 'disk_2']
+            
+            # Чередуем источники
+            selected_from_year = []
+            d1_idx, d2_idx = 0, 0
+            
+            for i in range(photos_per_year):
+                # Чередуем: disk_1, disk_2, disk_1, disk_2...
+                if i % 2 == 0:
+                    if d1_idx < len(disk1_photos):
+                        selected_from_year.append(disk1_photos[d1_idx])
+                        d1_idx += 1
+                    elif d2_idx < len(disk2_photos):
+                        selected_from_year.append(disk2_photos[d2_idx])
+                        d2_idx += 1
+                else:
+                    if d2_idx < len(disk2_photos):
+                        selected_from_year.append(disk2_photos[d2_idx])
+                        d2_idx += 1
+                    elif d1_idx < len(disk1_photos):
+                        selected_from_year.append(disk1_photos[d1_idx])
+                        d1_idx += 1
+            
+            selected_photos.extend(selected_from_year)
             if len(selected_photos) >= 10:
                 selected_photos = selected_photos[:10]
                 break
         
         logger.info(f"📤 Публикуем {len(selected_photos)} фото (по {photos_per_year} из каждого года)")
+        
+        # Статистика по источникам
+        disk1_count = sum(1 for p in selected_photos if p.get('source') == 'disk_1')
+        disk2_count = sum(1 for p in selected_photos if p.get('source') == 'disk_2')
+        if disk2_count > 0:
+            logger.info(f"📊 Источники: Диск 1 = {disk1_count} фото, Диск 2 = {disk2_count} фото")
         
         success = telegram.publish_photos(selected_photos, f"{target_day}.{target_month:02d}")
         
