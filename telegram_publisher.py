@@ -19,25 +19,58 @@ class TelegramPublisher:
     MAX_CAPTION_LENGTH = 1024
     RATE_LIMIT_INTERVAL = 0.05
     
-    FAMILY_NAMES = ["Мама", "Марта", "Аркаша", "Папа", "Лилу"]
+    FAMILY_NAMES = ["Саша", "Марта", "Аркадий", "Папа", "Лилу"]
     
+    # Универсальные вопросы (без имен) - подходят для всего
     RANDOM_QUESTIONS = [
-        "Кто вспомнит, где это было? 🤔",
-        "Узнаёте место? 🗺️",
+        "Кто вспомнит, что это было? 🤔",
+        "Узнаёте? 😊",
         "Помните этот день? 📸",
-        "Что за событие? 🎉",
-        "Где мы тут были? 🌍",
-        "Что за место? 🏛️",
+        "Угадаете, что за событие? 🎉",
+        "Где это мы? 🗺️",
+        "Ностальгия! 💭",
+        "Эх, времечко было! ⏰",
+        "Вспоминаем? 🌟",
+        "Какие эмоции! 😍",
+        "Кто помнит детали? 🔍",
+        "Классное было время! ✨",
+        "Вот это воспоминания! 🎊",
+        "Как быстро летит время! 💫",
+        "Угадайте, что было дальше? 😄",
+        "Кто помнит эту историю? 📖",
     ]
     
-    QUESTIONS_WITH_NAMES = [
-        "Узнаёте {name} на фото? 😊",
-        "Где были {name1} и {name2}? 🚗",
-        "Помните эту поездку с {name}? 🌍",
-        "Кто был вместе с {name}? 👥",
-        "Что делала {name}? 🤔",
-        "{name}, помнишь этот момент? 📸",
-        "Где это {name1} с {name2}? 🗺️",
+    # Вопросы с одним именем
+    QUESTIONS_WITH_ONE_NAME = [
+        "Узнаёте {name}? 😊",
+        "{name}, помнишь? 📸",
+        "Что делал(а) {name}? 🤔",
+        "{name} в ударе! 🌟",
+        "Как вам {name} тут? 😄",
+        "{name} красавица/красавец! 💫",
+        "Вот это {name}! 👏",
+        "{name}, а помнишь этот момент? 💭",
+        "Какое настроение у {name}? 😊",
+        "{name} в главной роли! ⭐",
+        "Узнали {name}? 👀",
+        "{name}, расскажи историю! 📖",
+        "Вспоминаем {name}! 🌈",
+        "Что задумал(а) {name}? 🎭",
+    ]
+    
+    # Вопросы с двумя именами
+    QUESTIONS_WITH_TWO_NAMES = [
+        "Где были {name1} и {name2}? 🗺️",
+        "{name1} с {name2} - мечта! 💕",
+        "Помните, {name1} и {name2}? 😊",
+        "{name1} vs {name2} - кто круче? 😄",
+        "Команда мечты: {name1} и {name2}! 🌟",
+        "{name1} + {name2} = веселье! 🎉",
+        "Узнали {name1} и {name2}? 👀",
+        "{name1} и {name2} - что вы тут делали? 🎭",
+        "{name1}, {name2} - ваши комментарии? 😄",
+        "Кто круче: {name1} или {name2}? 🏆",
+        "Дуэт года: {name1} и {name2}! 🎪",
     ]
     
     def __init__(self, token: str, chat_id: str):
@@ -57,12 +90,15 @@ class TelegramPublisher:
         use_names = random.choice([True, False])
         
         if use_names:
-            question_template = random.choice(self.QUESTIONS_WITH_NAMES)
+            # Выбираем: один или два имени
+            use_two_names = random.choice([True, False])
             
-            if '{name1}' in question_template and '{name2}' in question_template:
+            if use_two_names:
+                question_template = random.choice(self.QUESTIONS_WITH_TWO_NAMES)
                 names = random.sample(self.FAMILY_NAMES, 2)
                 return question_template.format(name1=names[0], name2=names[1])
             else:
+                question_template = random.choice(self.QUESTIONS_WITH_ONE_NAME)
                 name = random.choice(self.FAMILY_NAMES)
                 return question_template.format(name=name)
         else:
