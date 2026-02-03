@@ -79,6 +79,11 @@ class YandexDiskClient:
                 logger.info(f"📊 Обработано {total_processed} файлов...")
                 
                 for item in items:
+                    # Пропускаем видео файлы
+                    name = item.get('name', '').lower()
+                    if name.endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv')):
+                        continue
+                    
                     photo_date = self._extract_date(item)
                     
                     if photo_date and photo_date.day == day and photo_date.month == month:
@@ -163,6 +168,11 @@ class YandexDiskClient:
                     if item.get('type') != 'file':
                         continue
                     
+                    # Пропускаем видео файлы
+                    name = item.get('name', '').lower()
+                    if name.endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv')):
+                        continue
+                    
                     photo_date = self._extract_date(item)
                     
                     if photo_date and photo_date.day == day and photo_date.month == month:
@@ -241,6 +251,11 @@ class YandexDiskClient:
                 
                 for item in items:
                     if item.get('type') != 'file':
+                        continue
+                    
+                    # Пропускаем видео файлы
+                    name = item.get('name', '').lower()
+                    if name.endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv')):
                         continue
                     
                     photo_date = self._extract_date(item)
