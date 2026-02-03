@@ -22,17 +22,24 @@ logger = logging.getLogger(__name__)
 def main():
     try:
         yandex_token = os.getenv('YANDEX_DISK_TOKEN')
+        yandex_token_2 = os.getenv('YANDEX_DISK_TOKEN_2')  # Второй Яндекс.Диск (опционально)
         telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
         telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID')
         
         if not all([yandex_token, telegram_token, telegram_chat_id]):
-            logger.error("❌ Не все переменные окружения установлены")
+            logger.error("❌ Не все обязательные переменные окружения установлены")
             logger.error("Требуются: YANDEX_DISK_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID")
             sys.exit(1)
         
         logger.info("🚀 Инициализация клиентов...")
         yandex = YandexDiskClient(yandex_token)
         telegram = TelegramPublisher(telegram_token, telegram_chat_id)
+        
+        # Второй Яндекс.Диск (если токен указан)
+        yandex_2 = None
+        if yandex_token_2:
+            logger.info("📂 Инициализирован второй Яндекс.Диск")
+            yandex_2 = YandexDiskClient(yandex_token_2)
         
         # Московское время (UTC+3)
         moscow_tz = timezone(timedelta(hours=3))
@@ -43,7 +50,36 @@ def main():
         logger.info(f"🕐 Московское время: {today.strftime('%Y-%m-%d %H:%M:%S')} МСК")
         logger.info(f"🔍 Ищем фото за {target_day}.{target_month:02d} из прошлых лет...")
         
+        # Поиск в первом Яндекс.Диске
         photos = yandex.find_photos_by_date(target_day, target_month)
+        
+        # Поиск во втором Яндекс.Диске (если есть)
+        if yandex_2:
+            logger.info("🔍 Ищем фото во втором Яндекс.Диске...")
+            photos_2 = yandex_2.find_photos_by_date(target_day, target_month)
+            
+            # Объединяем результаты
+            if photos_2:
+                logger.info(f"✅ Второй Яндекс.Диск: найдено {len(photos_2)} фото")
+                photos.extend(photos_2)
+                
+                # Удаляем дубликаты по имени файла
+                seen_names = set()
+                unique_photos = []
+                for photo in photos:
+                    name = photo.get('name', '')
+                    if name not in seen_names:
+                        seen_names.add(name)
+                        unique_photos.append(photo)
+                
+                duplicate_count = len(photos) - len(unique_photos)
+                if duplicate_count > 0:
+                    logger.info(f"🔄 Удалено {duplicate_count} дубликатов")
+                
+                photos = unique_photos
+                
+                # Пересортировка по годам после объединения
+                photos.sort(key=lambda x: x['year'])
         
         if not photos:
             logger.info(f"📭 Фотографий за {target_day}.{target_month:02d} не найдено")
