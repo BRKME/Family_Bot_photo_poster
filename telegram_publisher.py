@@ -130,6 +130,28 @@ class TelegramPublisher:
             response.raise_for_status()
             logger.info("✅ Сообщение отправлено")
             return True
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 429:
+                # Rate limit - получаем retry_after из ответа
+                try:
+                    error_data = e.response.json()
+                    retry_after = error_data.get('parameters', {}).get('retry_after', 5)
+                    logger.warning(f"⚠️ Rate limit! Ожидание {retry_after} секунд...")
+                    time.sleep(retry_after + 1)  # +1 для гарантии
+                    
+                    # Повторная попытка
+                    response = requests.post(url, json=data, timeout=self.REQUEST_TIMEOUT)
+                    response.raise_for_status()
+                    logger.info("✅ Сообщение отправлено (после retry)")
+                    return True
+                except Exception as retry_error:
+                    logger.error(f"❌ Ошибка при retry: {retry_error}")
+                    return False
+            else:
+                logger.error(f"❌ HTTP ошибка отправки сообщения: {e}")
+                if hasattr(e, 'response') and e.response is not None:
+                    logger.error(f"Status: {e.response.status_code}, Body: {e.response.text[:200]}")
+                return False
         except requests.exceptions.Timeout:
             logger.error("⏱️ Timeout при отправке сообщения")
             return False
@@ -156,7 +178,7 @@ class TelegramPublisher:
                 text_message = f"📅 {date_str}\n\n{random_question}"
                 if not self.send_message(text_message):
                     logger.warning("⚠️ Не удалось отправить текстовое сообщение")
-                time.sleep(0.5)
+                time.sleep(2)  # Увеличено для избежания rate limit
             
             if len(photo_group) == 1:
                 result = self._send_single_photo(photo_group[0], date_str)
@@ -168,7 +190,7 @@ class TelegramPublisher:
                 logger.error(f"❌ Ошибка при публикации группы {i // max_photos_per_group + 1}")
             
             if i + max_photos_per_group < len(photos):
-                time.sleep(1)
+                time.sleep(2)  # Увеличено для избежания rate limit
         
         return success
     
@@ -243,6 +265,28 @@ class TelegramPublisher:
             response.raise_for_status()
             logger.info(f"✅ Отправлена медиа-группа из {len(media)} фото")
             return True
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 429:
+                # Rate limit - получаем retry_after из ответа
+                try:
+                    error_data = e.response.json()
+                    retry_after = error_data.get('parameters', {}).get('retry_after', 5)
+                    logger.warning(f"⚠️ Rate limit! Ожидание {retry_after} секунд...")
+                    time.sleep(retry_after + 1)  # +1 для гарантии
+                    
+                    # Повторная попытка
+                    response = requests.post(url, data=data, timeout=self.REQUEST_TIMEOUT)
+                    response.raise_for_status()
+                    logger.info(f"✅ Отправлена медиа-группа из {len(media)} фото (после retry)")
+                    return True
+                except Exception as retry_error:
+                    logger.error(f"❌ Ошибка при retry: {retry_error}")
+                    return False
+            else:
+                logger.error(f"❌ HTTP ошибка отправки медиа-группы: {e}")
+                if hasattr(e, 'response') and e.response is not None:
+                    logger.error(f"Status: {e.response.status_code}, Body: {e.response.text[:200]}")
+                return False
         except requests.exceptions.Timeout:
             logger.error(f"⏱️ Timeout при отправке медиа-группы из {len(media)} фото")
             return False
