@@ -114,12 +114,21 @@ def main():
         logger.info(f"📊 Фото распределены по {years_count} годам")
         
         # Адаптивная логика под лимит 12 фото
-        if years_count <= 4:
-            photos_per_year = 3  # 4 года * 3 = 12 фото
+        if years_count == 1:
+            # Один год - публикуем все (до 12)
+            photos_per_year = 12
+        elif years_count == 2:
+            # Два года - по 6 фото
+            photos_per_year = 6
+        elif years_count <= 4:
+            # 3-4 года - по 3 фото
+            photos_per_year = 3
         elif years_count <= 6:
-            photos_per_year = 2  # 6 лет * 2 = 12 фото
+            # 5-6 лет - по 2 фото
+            photos_per_year = 2
         else:
-            photos_per_year = 1  # 7+ лет * 1 = 12+ фото
+            # 7+ лет - по 1 фото
+            photos_per_year = 1
         
         selected_photos = []
         for year in sorted(photos_by_year.keys()):
