@@ -120,8 +120,11 @@ def main():
         elif years_count == 2:
             # Два года - по 6 фото
             photos_per_year = 6
-        elif years_count <= 4:
-            # 3-4 года - по 3 фото
+        elif years_count == 3:
+            # 3 года - по 4 фото
+            photos_per_year = 4
+        elif years_count == 4:
+            # 4 года - по 3 фото
             photos_per_year = 3
         elif years_count <= 6:
             # 5-6 лет - по 2 фото
