@@ -113,61 +113,62 @@ def main():
         years_count = len(photos_by_year)
         logger.info(f"📊 Фото распределены по {years_count} годам")
         
-        # Адаптивная логика под лимит 12 фото
-        if years_count == 1:
-            # Один год - публикуем все (до 12)
-            photos_per_year = 12
-        elif years_count == 2:
-            # Два года - по 6 фото
-            photos_per_year = 6
-        elif years_count == 3:
-            # 3 года - по 4 фото
-            photos_per_year = 4
-        elif years_count == 4:
-            # 4 года - по 3 фото
-            photos_per_year = 3
-        elif years_count <= 6:
-            # 5-6 лет - по 2 фото
-            photos_per_year = 2
+        # Если общее количество фото ≤ 12, публикуем все
+        total_photos = len(photos)
+        if total_photos <= 12:
+            logger.info(f"📊 Всего фото ({total_photos}) ≤ 12, публикуем все")
+            selected_photos = photos
+            log_message = f"📤 Публикуем все {len(selected_photos)} фото"
         else:
-            # 7+ лет - по 1 фото
-            photos_per_year = 1
+            # Адаптивная логика под лимит 12 фото
+            if years_count == 1:
+                photos_per_year = 12
+            elif years_count == 2:
+                photos_per_year = 6
+            elif years_count <= 4:
+                photos_per_year = 3
+            elif years_count <= 6:
+                photos_per_year = 2
+            else:
+                photos_per_year = 1
+            
+            selected_photos = []
+            for year in sorted(photos_by_year.keys()):
+                year_photos = photos_by_year[year]
+                
+                # Разделяем по источникам для равномерного выбора
+                disk1_photos = [p for p in year_photos if p.get('source') == 'disk_1']
+                disk2_photos = [p for p in year_photos if p.get('source') == 'disk_2']
+                
+                # Чередуем источники
+                selected_from_year = []
+                d1_idx, d2_idx = 0, 0
+                
+                for i in range(photos_per_year):
+                    # Чередуем: disk_1, disk_2, disk_1, disk_2...
+                    if i % 2 == 0:
+                        if d1_idx < len(disk1_photos):
+                            selected_from_year.append(disk1_photos[d1_idx])
+                            d1_idx += 1
+                        elif d2_idx < len(disk2_photos):
+                            selected_from_year.append(disk2_photos[d2_idx])
+                            d2_idx += 1
+                    else:
+                        if d2_idx < len(disk2_photos):
+                            selected_from_year.append(disk2_photos[d2_idx])
+                            d2_idx += 1
+                        elif d1_idx < len(disk1_photos):
+                            selected_from_year.append(disk1_photos[d1_idx])
+                            d1_idx += 1
+                
+                selected_photos.extend(selected_from_year)
+                if len(selected_photos) >= 12:
+                    selected_photos = selected_photos[:12]
+                    break
+            
+            log_message = f"📤 Публикуем {len(selected_photos)} фото (по {photos_per_year} из каждого года)"
         
-        selected_photos = []
-        for year in sorted(photos_by_year.keys()):
-            year_photos = photos_by_year[year]
-            
-            # Разделяем по источникам для равномерного выбора
-            disk1_photos = [p for p in year_photos if p.get('source') == 'disk_1']
-            disk2_photos = [p for p in year_photos if p.get('source') == 'disk_2']
-            
-            # Чередуем источники
-            selected_from_year = []
-            d1_idx, d2_idx = 0, 0
-            
-            for i in range(photos_per_year):
-                # Чередуем: disk_1, disk_2, disk_1, disk_2...
-                if i % 2 == 0:
-                    if d1_idx < len(disk1_photos):
-                        selected_from_year.append(disk1_photos[d1_idx])
-                        d1_idx += 1
-                    elif d2_idx < len(disk2_photos):
-                        selected_from_year.append(disk2_photos[d2_idx])
-                        d2_idx += 1
-                else:
-                    if d2_idx < len(disk2_photos):
-                        selected_from_year.append(disk2_photos[d2_idx])
-                        d2_idx += 1
-                    elif d1_idx < len(disk1_photos):
-                        selected_from_year.append(disk1_photos[d1_idx])
-                        d1_idx += 1
-            
-            selected_photos.extend(selected_from_year)
-            if len(selected_photos) >= 12:
-                selected_photos = selected_photos[:12]
-                break
-        
-        logger.info(f"📤 Публикуем {len(selected_photos)} фото (по {photos_per_year} из каждого года)")
+        logger.info(log_message)
         
         # Статистика по источникам
         disk1_count = sum(1 for p in selected_photos if p.get('source') == 'disk_1')
