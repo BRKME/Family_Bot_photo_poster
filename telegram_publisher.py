@@ -1,13 +1,15 @@
 """
 Модуль для публикации фотографий в Telegram
+v2.0 - загрузка фото байтами (fix WEBPAGE_CURL_FAILED)
 """
 import requests
-from typing import List, Dict
+from typing import List, Dict, Optional, Tuple
 import time
 import html
 import logging
 import random
 import json
+import io
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -194,12 +196,32 @@ class TelegramPublisher:
         
         return success
     
+    def _download_photo(self, url: str, name: str = "photo") -> Optional[bytes]:
+        """Скачивает фото по URL и возвращает байты"""
+        try:
+            response = requests.get(url, timeout=60, stream=True)
+            response.raise_for_status()
+            data = response.content
+            if len(data) < 100:
+                logger.warning(f"⚠️ Слишком маленький файл ({len(data)} байт): {name}")
+                return None
+            logger.debug(f"📥 Скачано {len(data)} байт: {name}")
+            return data
+        except Exception as e:
+            logger.error(f"❌ Ошибка скачивания {name}: {e}")
+            return None
+    
     def _send_single_photo(self, photo: Dict, date_str: str) -> bool:
         self._rate_limit()
         
         download_url = photo.get('download_url')
         if not download_url:
             logger.warning(f"⚠️ Нет URL для скачивания: {photo.get('name', 'unknown')}")
+            return False
+        
+        # Скачиваем фото
+        photo_data = self._download_photo(download_url, photo.get('name', 'unknown'))
+        if not photo_data:
             return False
         
         url = self.BASE_URL.format(token=self.token, method='sendPhoto')
@@ -209,12 +231,14 @@ class TelegramPublisher:
         
         data = {
             'chat_id': self.chat_id,
-            'photo': download_url,
             'caption': caption
+        }
+        files = {
+            'photo': (photo.get('name', 'photo.jpg'), io.BytesIO(photo_data), 'image/jpeg')
         }
         
         try:
-            response = requests.post(url, json=data, timeout=self.REQUEST_TIMEOUT)
+            response = requests.post(url, data=data, files=files, timeout=60)
             response.raise_for_status()
             logger.info(f"✅ Отправлено фото: {photo.get('name', 'unknown')}")
             return True
@@ -232,24 +256,29 @@ class TelegramPublisher:
         
         url = self.BASE_URL.format(token=self.token, method='sendMediaGroup')
         
+        # Скачиваем все фото
         media = []
+        files = {}
         for idx, photo in enumerate(photos):
             download_url = photo.get('download_url')
-            
             if not download_url:
                 logger.warning(f"⚠️ Пропуск фото без URL: {photo.get('name', 'unknown')}")
                 continue
             
+            photo_data = self._download_photo(download_url, photo.get('name', 'unknown'))
+            if not photo_data:
+                continue
+            
+            attach_name = f"photo_{idx}"
             year = photo.get('year', '')
             photo_caption = str(year) if include_years and year else ""
             
-            media_item = {
+            media.append({
                 'type': 'photo',
-                'media': download_url,
+                'media': f'attach://{attach_name}',
                 'caption': photo_caption
-            }
-            
-            media.append(media_item)
+            })
+            files[attach_name] = (photo.get('name', f'photo_{idx}.jpg'), io.BytesIO(photo_data), 'image/jpeg')
         
         if not media:
             logger.error("❌ Нет валидных фото для отправки в медиа-группе")
@@ -261,21 +290,23 @@ class TelegramPublisher:
         }
         
         try:
-            response = requests.post(url, data=data, timeout=self.REQUEST_TIMEOUT)
+            response = requests.post(url, data=data, files=files, timeout=120)
             response.raise_for_status()
             logger.info(f"✅ Отправлена медиа-группа из {len(media)} фото")
             return True
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 429:
-                # Rate limit - получаем retry_after из ответа
                 try:
                     error_data = e.response.json()
                     retry_after = error_data.get('parameters', {}).get('retry_after', 5)
                     logger.warning(f"⚠️ Rate limit! Ожидание {retry_after} секунд...")
-                    time.sleep(retry_after + 1)  # +1 для гарантии
+                    time.sleep(retry_after + 1)
                     
-                    # Повторная попытка
-                    response = requests.post(url, data=data, timeout=self.REQUEST_TIMEOUT)
+                    # Пересоздаём BytesIO (они уже consumed)
+                    for key in files:
+                        files[key][1].seek(0)
+                    
+                    response = requests.post(url, data=data, files=files, timeout=120)
                     response.raise_for_status()
                     logger.info(f"✅ Отправлена медиа-группа из {len(media)} фото (после retry)")
                     return True
