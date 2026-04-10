@@ -1,6 +1,7 @@
 """
 Модуль для публикации фотографий в Telegram
 v2.0 - загрузка фото байтами (fix WEBPAGE_CURL_FAILED)
+v2.1 - валидация размеров изображений (fix PHOTO_INVALID_DIMENSIONS)
 """
 import requests
 from typing import List, Dict, Optional, Tuple
@@ -11,6 +12,7 @@ import random
 import json
 import io
 from datetime import datetime
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +213,60 @@ class TelegramPublisher:
             logger.error(f"❌ Ошибка скачивания {name}: {e}")
             return None
     
+    def _validate_and_fix_image(self, photo_data: bytes, name: str = "photo") -> Optional[bytes]:
+        """
+        Проверяет и исправляет размеры изображения для Telegram.
+        Telegram требует:
+        - Сумма width + height >= 100
+        - Ни одна сторона не > 10000 пикселей
+        - Соотношение сторон не более 20:1
+        """
+        try:
+            img = Image.open(io.BytesIO(photo_data))
+            width, height = img.size
+            original_size = (width, height)
+            needs_fix = False
+            
+            # Проверка минимальных размеров
+            if width + height < 100:
+                logger.warning(f"⚠️ {name}: слишком маленькое ({width}x{height}), пропускаем")
+                return None
+            
+            # Проверка максимальных размеров (10000 px)
+            max_side = 10000
+            if width > max_side or height > max_side:
+                ratio = min(max_side / width, max_side / height)
+                width = int(width * ratio)
+                height = int(height * ratio)
+                needs_fix = True
+                logger.info(f"📐 {name}: уменьшаем с {original_size} до ({width}x{height})")
+            
+            # Проверка соотношения сторон (макс 20:1)
+            aspect_ratio = max(width, height) / min(width, height) if min(width, height) > 0 else 999
+            if aspect_ratio > 20:
+                logger.warning(f"⚠️ {name}: неподдерживаемое соотношение сторон {aspect_ratio:.1f}:1, пропускаем")
+                return None
+            
+            # Применяем изменения если нужно
+            if needs_fix:
+                img = img.resize((width, height), Image.Resampling.LANCZOS)
+                
+                # Конвертируем в RGB если нужно (для JPEG)
+                if img.mode in ('RGBA', 'P'):
+                    img = img.convert('RGB')
+                
+                output = io.BytesIO()
+                img.save(output, format='JPEG', quality=90)
+                result = output.getvalue()
+                logger.info(f"✅ {name}: исправлено {original_size} → ({width}x{height}), {len(result)} байт")
+                return result
+            
+            return photo_data
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка валидации {name}: {e}")
+            return None
+    
     def _send_single_photo(self, photo: Dict, date_str: str) -> bool:
         self._rate_limit()
         
@@ -221,6 +277,11 @@ class TelegramPublisher:
         
         # Скачиваем фото
         photo_data = self._download_photo(download_url, photo.get('name', 'unknown'))
+        if not photo_data:
+            return False
+        
+        # Валидация и исправление размеров
+        photo_data = self._validate_and_fix_image(photo_data, photo.get('name', 'unknown'))
         if not photo_data:
             return False
         
@@ -266,6 +327,11 @@ class TelegramPublisher:
                 continue
             
             photo_data = self._download_photo(download_url, photo.get('name', 'unknown'))
+            if not photo_data:
+                continue
+            
+            # Валидация и исправление размеров
+            photo_data = self._validate_and_fix_image(photo_data, photo.get('name', 'unknown'))
             if not photo_data:
                 continue
             
