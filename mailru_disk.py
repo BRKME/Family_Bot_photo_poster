@@ -84,31 +84,68 @@ class MailRuClient:
         """Логинимся в Mail.ru, получаем CSRF и dispatcher URL."""
         logger.info("🔐 Авторизация в Mail.ru...")
 
+        # ВАЖНО: форма Mail.ru ожидает Login БЕЗ @-части, а Domain отдельно.
+        # Если передать full_email как Login — Mail.ru склеит "user@mail.ru@mail.ru"
+        # и логин не пройдёт.
+        local_part = self.login.split('@')[0]
+
         # 1. Логин — получаем cookies сессии
         try:
             resp = self.session.post(
                 self.AUTH_URL,
                 data={
-                    'Login': self.login,
+                    'Login': local_part,
                     'Password': self.password,
                     'Domain': self.domain,
                     'page': f'{self.CLOUD_URL}/?from=promo',
                     'new_auth_form': '1',
+                    'saveauth': '1',
                 },
                 timeout=self.REQUEST_TIMEOUT,
                 allow_redirects=True,
             )
-            resp.raise_for_status()
         except requests.exceptions.RequestException as e:
             raise RuntimeError(f"Сетевая ошибка при логине Mail.ru: {e}")
 
         if 'Mpop' not in self.session.cookies:
+            # Подробная диагностика, чтобы понять что не так
+            logger.error("─" * 60)
+            logger.error("🔍 Диагностика провала логина:")
+            logger.error(f"   HTTP статус: {resp.status_code}")
+            logger.error(f"   Финальный URL: {resp.url}")
+            logger.error(f"   История редиректов: {[r.url for r in resp.history]}")
+            cookies_got = list(self.session.cookies.keys())
+            logger.error(f"   Полученные cookies: {cookies_got or '(нет)'}")
+
+            # Ищем подсказки в URL и теле ответа
+            url_lower = resp.url.lower()
+            body_snippet = resp.text[:500] if resp.text else ''
+
+            hints = []
+            if 'fail' in url_lower or 'error' in url_lower:
+                hints.append("URL содержит 'fail/error' — Mail.ru явно вернул ошибку логина")
+            if 'captcha' in url_lower or 'captcha' in body_snippet.lower():
+                hints.append("Mail.ru требует капчу — нужно зайти в браузере один раз")
+            if '2-step' in url_lower or 'twofa' in url_lower or 'sms' in url_lower:
+                hints.append("Mail.ru запросил 2FA — обычный пароль не работает, нужен app password")
+            if 'invalid' in body_snippet.lower():
+                hints.append("В теле ответа есть 'invalid' — вероятно неверный пароль")
+
+            if hints:
+                logger.error("   Возможные причины:")
+                for h in hints:
+                    logger.error(f"      • {h}")
+            logger.error("─" * 60)
+
             raise RuntimeError(
-                "❌ Не получен Mpop cookie. Возможные причины:\n"
+                "❌ Не получен Mpop cookie. Самые частые причины:\n"
+                "  • App password Mail.ru работает для IMAP/SMTP, но НЕ для cloud.mail.ru.\n"
+                "    Если 2FA включена и app password не пускает — нужен fallback через\n"
+                "    cookies из браузера (см. README раздел 'Cookie auth')\n"
+                "  • Mail.ru может требовать капчу при первом входе с GitHub Actions IP —\n"
+                "    зайди один раз в браузере с того же аккаунта, потом попробуй снова\n"
                 "  • Неверный логин/пароль\n"
-                "  • Включена 2FA — нужен пароль для внешних приложений\n"
-                "    (https://account.mail.ru/user/2-step-auth/passwords/)\n"
-                "  • Mail.ru требует капчу (попробуйте зайти в браузере)"
+                "  Подробная диагностика выше в логах ↑"
             )
 
         # 2. Получаем SDCS cookie (нужно для cloud.mail.ru)
