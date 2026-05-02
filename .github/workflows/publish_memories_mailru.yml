@@ -1,0 +1,58 @@
+name: Publish Daily Memories (Mail.ru)
+
+on:
+  schedule:
+    - cron: '0 9 * * *'  # 12:00 МСК (UTC+3) — параллельно с Яндекс-флоу
+
+  workflow_dispatch:
+
+jobs:
+  publish-memories-mailru:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15  # Mail.ru сканируется рекурсивно — может быть дольше
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Cache pip packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Run Mail.ru bot
+        env:
+          MAILRU_LOGIN: ${{ secrets.MAILRU_LOGIN }}
+          MAILRU_PASSWORD: ${{ secrets.MAILRU_PASSWORD }}
+          MAILRU_FOLDERS: ${{ secrets.MAILRU_FOLDERS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python mailru_main.py
+      
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mailru-bot-logs-${{ github.run_id }}
+          path: |
+            mailru_bot.log
+          retention-days: 7
+      
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ Mail.ru workflow failed! Check logs in artifacts."
