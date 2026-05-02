@@ -84,12 +84,23 @@ class MailRuClient:
             self.domain = 'mail.ru'
 
         self.session = requests.Session()
+        # Имитируем настоящий браузер — Mail.ru API проверяет заголовки.
+        # Без Origin/Referer/Accept часто отдаёт 403 даже с валидными cookies.
         self.session.headers.update({
             'User-Agent': (
-                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
                 'AppleWebKit/537.36 (KHTML, like Gecko) '
                 'Chrome/121.0.0.0 Safari/537.36'
-            )
+            ),
+            'Accept': 'application/json, text/javascript, */*; q=0.01',
+            'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Origin': 'https://cloud.mail.ru',
+            'Referer': 'https://cloud.mail.ru/home/',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Sec-Fetch-Dest': 'empty',
+            'Sec-Fetch-Mode': 'cors',
+            'Sec-Fetch-Site': 'same-origin',
         })
 
         self.csrf_token: Optional[str] = None
@@ -221,15 +232,33 @@ class MailRuClient:
 
     def _fetch_csrf_and_dispatcher(self) -> None:
         """Получает CSRF токен и dispatcher URL. Общий шаг для cookie и login auth."""
-        # 1. Тыкаем cloud.mail.ru, чтобы получить sdcs/прочие cookies
+        # 1. Тыкаем главную страницу cloud.mail.ru — как настоящий браузер.
+        # Это устанавливает любые недостающие cookies и валидирует сессию.
         try:
-            self.session.get(
-                f'{self.CLOUD_URL}/?from=promo',
+            home_resp = self.session.get(
+                f'{self.CLOUD_URL}/home/',
+                # На /home браузер шлёт обычные навигационные заголовки, не XHR.
+                # Делаем отдельный запрос с другими headers для этого шага.
+                headers={
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Sec-Fetch-Dest': 'document',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': 'none',
+                    'X-Requested-With': '',  # Очищаем для навигационного запроса
+                },
                 timeout=self.REQUEST_TIMEOUT,
                 allow_redirects=True,
             )
+            logger.debug(f"   /home/ статус: {home_resp.status_code}, "
+                         f"финальный URL: {home_resp.url}")
+            # Если редиректнуло на login — cookies протухли
+            if 'login' in home_resp.url.lower() or 'auth' in home_resp.url.lower():
+                raise RuntimeError(
+                    f"❌ /home/ редиректнул на {home_resp.url} — cookies невалидны.\n"
+                    f"   Зайди в cloud.mail.ru в браузере и обнови MAILRU_COOKIES."
+                )
         except requests.exceptions.RequestException as e:
-            logger.warning(f"⚠️ Не удалось обновить cookies cloud.mail.ru: {e}")
+            logger.warning(f"⚠️ Не удалось открыть /home/: {e}")
 
         # 2. CSRF токен. Если cookies протухшие — здесь обычно и ловим.
         try:
@@ -241,10 +270,22 @@ class MailRuClient:
             raise RuntimeError(f"Сетевая ошибка при получении CSRF: {e}")
 
         if csrf_resp.status_code in (401, 403):
+            # Подробная диагностика — что именно сказал Mail.ru
+            logger.error("─" * 60)
+            logger.error(f"🔍 CSRF endpoint вернул {csrf_resp.status_code}")
+            logger.error(f"   URL: {csrf_resp.url}")
+            logger.error(f"   Response headers: {dict(csrf_resp.headers)}")
+            body = csrf_resp.text[:500] if csrf_resp.text else '(пусто)'
+            logger.error(f"   Body (первые 500 символов): {body}")
+            logger.error("─" * 60)
             raise RuntimeError(
-                f"❌ CSRF endpoint отдал {csrf_resp.status_code} — "
-                f"cookies протухли или невалидны.\n"
-                f"  Зайди в cloud.mail.ru в браузере и обнови секрет MAILRU_COOKIES."
+                f"❌ CSRF endpoint отдал {csrf_resp.status_code}.\n"
+                f"  Возможные причины:\n"
+                f"  • Cookies протухли (logout, смена пароля, истёк срок) → обнови MAILRU_COOKIES\n"
+                f"  • Mail.ru заметил смену IP (ты залогинился из дома, бот ходит из США/EU) →\n"
+                f"    нужен прокси через свой VPS, или запуск с того же IP что и логинился\n"
+                f"  • Mail.ru обновил API и теперь требует другие заголовки\n"
+                f"  Подробности выше в логах ↑"
             )
 
         try:
