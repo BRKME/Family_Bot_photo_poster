@@ -25,6 +25,7 @@ from datetime import datetime, timezone, timedelta
 
 import requests
 
+from mailru_public import MailRuPublicClient
 from mailru_disk import MailRuClient
 
 logging.basicConfig(
@@ -144,6 +145,7 @@ def main():
         logger.error(f"❌ Неизвестный TEST_MODE: {mode}")
         sys.exit(1)
 
+    public_link = os.getenv('MAILRU_PUBLIC_LINK')
     login = os.getenv('MAILRU_LOGIN')
     password = os.getenv('MAILRU_PASSWORD')
     cookies = os.getenv('MAILRU_COOKIES')
@@ -155,58 +157,76 @@ def main():
     tg_token = os.getenv('TELEGRAM_BOT_TOKEN')
     tg_chat = os.getenv('TELEGRAM_TEST_CHAT_ID') or os.getenv('TELEGRAM_CHAT_ID')
 
-    if not cookies and not (login and password):
-        logger.error("❌ Нужны либо MAILRU_COOKIES (рекомендуется),")
-        logger.error("   либо MAILRU_LOGIN + MAILRU_PASSWORD")
+    if not (public_link or cookies or (login and password)):
+        logger.error("❌ Нужен MAILRU_PUBLIC_LINK (рекомендуется), либо")
+        logger.error("   MAILRU_COOKIES, либо MAILRU_LOGIN+MAILRU_PASSWORD")
         sys.exit(1)
 
     folders = [f.strip() for f in folders_raw.split(',') if f.strip()]
     day, month, date_label = parse_test_date(test_date_raw)
 
-    logger.info(f"🔧 Режим: {mode}")
+    # Какой режим источника используем
+    if public_link:
+        source_mode = 'public_link'
+    elif cookies:
+        source_mode = 'cookies'
+    else:
+        source_mode = 'login_password'
+
+    logger.info(f"🔧 Режим теста: {mode}")
     logger.info(f"🔧 Дата: {date_label}")
-    logger.info(f"🔧 Папки: {folders}")
-    logger.info(f"🔧 Auth: {'cookies' if cookies else 'login/password'}")
+    logger.info(f"🔧 Источник: {source_mode}")
+    if source_mode != 'public_link':
+        logger.info(f"🔧 Папки: {folders}")
     if mode == 'send_one':
         logger.info(f"🔧 Telegram чат: {tg_chat}")
 
-    # --- Шаг 1: авторизация ---
+    # --- Шаг 1: подключение к источнику ---
     print()
     print("─" * 70)
-    print("Шаг 1/4: Авторизация в Mail.ru")
+    if source_mode == 'public_link':
+        print("Шаг 1/4: Проверка публичной ссылки Mail.ru")
+    else:
+        print("Шаг 1/4: Авторизация в Mail.ru")
     print("─" * 70)
     try:
-        client = MailRuClient(
-            login=login, password=password,
-            cookies=cookies, scan_folders=folders,
-        )
-        client._authenticate()
-        logger.info("✅ Авторизация прошла успешно")
-    except Exception as e:
-        logger.error(f"❌ Авторизация не удалась: {e}")
-        if cookies:
-            logger.error("   Проверь MAILRU_COOKIES — возможно протухли,")
-            logger.error("   зайди в cloud.mail.ru в браузере и обнови секрет.")
+        if source_mode == 'public_link':
+            client = MailRuPublicClient(public_link)
+            logger.info("✅ Публичная ссылка распарсена")
         else:
-            logger.error("   Проверь:")
-            logger.error("   • MAILRU_LOGIN — полный email (например, family@mail.ru)")
-            logger.error("   • MAILRU_PASSWORD — пароль для приложений, не основной")
-            logger.error("   • Включена ли 2FA — без app password не залогинишься")
+            client = MailRuClient(
+                login=login, password=password,
+                cookies=cookies, scan_folders=folders,
+            )
+            client._authenticate()
+            logger.info("✅ Авторизация прошла успешно")
+    except Exception as e:
+        logger.error(f"❌ Не удалось подключиться: {e}")
+        if source_mode == 'public_link':
+            logger.error("   Проверь MAILRU_PUBLIC_LINK — формат должен быть")
+            logger.error("   https://cloud.mail.ru/public/XXXX/YYYY")
+        elif source_mode == 'cookies':
+            logger.error("   Проверь MAILRU_COOKIES — возможно протухли")
+        else:
+            logger.error("   Проверь MAILRU_LOGIN/MAILRU_PASSWORD")
         sys.exit(1)
 
-    # --- Шаг 2: листинг папок ---
-    print()
-    print("─" * 70)
-    print("Шаг 2/4: Листинг настроенных папок")
-    print("─" * 70)
-    all_ok = True
-    for folder in folders:
-        if not list_folder_preview(client, folder):
-            all_ok = False
+    # --- Шаг 2: листинг (только для auth-based, public сразу к поиску) ---
+    if source_mode != 'public_link':
         print()
-    if not all_ok:
-        logger.error("❌ Не все папки доступны — проверь MAILRU_FOLDERS")
-        sys.exit(1)
+        print("─" * 70)
+        print("Шаг 2/4: Листинг настроенных папок")
+        print("─" * 70)
+        all_ok = True
+        for folder in folders:
+            if not list_folder_preview(client, folder):
+                all_ok = False
+            print()
+        if not all_ok:
+            logger.error("❌ Не все папки доступны — проверь MAILRU_FOLDERS")
+            sys.exit(1)
+    else:
+        logger.info("ℹ️ Листинг папок пропускаем — публичный API сразу делает рекурсивный обход")
 
     # --- Шаг 3: поиск фото ---
     print()

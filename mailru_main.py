@@ -21,7 +21,8 @@ from typing import List, Dict
 import requests
 from PIL import Image
 
-from mailru_disk import MailRuClient
+from mailru_public import MailRuPublicClient
+from mailru_disk import MailRuClient  # legacy fallback (auth-based)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -171,6 +172,7 @@ def send_single_photo(token: str, chat_id: str, photo: Dict, data: bytes) -> boo
 
 def main():
     try:
+        public_link = os.getenv('MAILRU_PUBLIC_LINK')
         login = os.getenv('MAILRU_LOGIN')
         password = os.getenv('MAILRU_PASSWORD')
         cookies = os.getenv('MAILRU_COOKIES')
@@ -178,14 +180,13 @@ def main():
         tg_token = os.getenv('TELEGRAM_BOT_TOKEN')
         tg_chat = os.getenv('TELEGRAM_CHAT_ID')
 
-        if not cookies and not (login and password):
-            logger.error("❌ Нужны либо MAILRU_COOKIES, либо MAILRU_LOGIN+MAILRU_PASSWORD")
+        if not (public_link or cookies or (login and password)):
+            logger.error("❌ Нужен MAILRU_PUBLIC_LINK (рекомендуется), либо")
+            logger.error("   MAILRU_COOKIES, либо MAILRU_LOGIN+MAILRU_PASSWORD")
             sys.exit(1)
         if not all([tg_token, tg_chat]):
             logger.error("❌ TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID обязательны")
             sys.exit(1)
-
-        folders = [f.strip() for f in folders_raw.split(',') if f.strip()]
 
         # Московское время (UTC+3)
         moscow_tz = timezone(timedelta(hours=3))
@@ -194,13 +195,19 @@ def main():
         date_str = f"{day}.{month:02d}"
 
         logger.info(f"🚀 Запуск Mail.ru-бота, дата: {date_str} (МСК {today:%H:%M})")
-        logger.info(f"📂 Папки для скана: {folders}")
-        logger.info(f"🔐 Auth: {'cookies' if cookies else 'login/password'}")
 
-        client = MailRuClient(
-            login=login, password=password,
-            cookies=cookies, scan_folders=folders,
-        )
+        # Приоритет: публичная ссылка > cookies > login/password
+        if public_link:
+            logger.info(f"🔗 Источник: публичная ссылка")
+            client = MailRuPublicClient(public_link)
+        else:
+            folders = [f.strip() for f in folders_raw.split(',') if f.strip()]
+            logger.info(f"📂 Папки для скана: {folders}")
+            logger.info(f"🔐 Auth: {'cookies' if cookies else 'login/password'}")
+            client = MailRuClient(
+                login=login, password=password,
+                cookies=cookies, scan_folders=folders,
+            )
         photos = client.find_photos_by_date(day, month)
 
         if not photos:
