@@ -35,6 +35,7 @@ jobs:
       
       - name: Run Mail.ru bot
         env:
+          MAILRU_COOKIES: ${{ secrets.MAILRU_COOKIES }}
           MAILRU_LOGIN: ${{ secrets.MAILRU_LOGIN }}
           MAILRU_PASSWORD: ${{ secrets.MAILRU_PASSWORD }}
           MAILRU_FOLDERS: ${{ secrets.MAILRU_FOLDERS }}

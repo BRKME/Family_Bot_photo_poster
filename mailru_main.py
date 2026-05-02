@@ -173,14 +173,16 @@ def main():
     try:
         login = os.getenv('MAILRU_LOGIN')
         password = os.getenv('MAILRU_PASSWORD')
+        cookies = os.getenv('MAILRU_COOKIES')
         folders_raw = os.getenv('MAILRU_FOLDERS', '/')
         tg_token = os.getenv('TELEGRAM_BOT_TOKEN')
         tg_chat = os.getenv('TELEGRAM_CHAT_ID')
 
-        if not all([login, password, tg_token, tg_chat]):
-            logger.error("❌ Не все переменные окружения установлены")
-            logger.error("Требуются: MAILRU_LOGIN, MAILRU_PASSWORD, "
-                         "TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID")
+        if not cookies and not (login and password):
+            logger.error("❌ Нужны либо MAILRU_COOKIES, либо MAILRU_LOGIN+MAILRU_PASSWORD")
+            sys.exit(1)
+        if not all([tg_token, tg_chat]):
+            logger.error("❌ TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID обязательны")
             sys.exit(1)
 
         folders = [f.strip() for f in folders_raw.split(',') if f.strip()]
@@ -193,8 +195,12 @@ def main():
 
         logger.info(f"🚀 Запуск Mail.ru-бота, дата: {date_str} (МСК {today:%H:%M})")
         logger.info(f"📂 Папки для скана: {folders}")
+        logger.info(f"🔐 Auth: {'cookies' if cookies else 'login/password'}")
 
-        client = MailRuClient(login, password, scan_folders=folders)
+        client = MailRuClient(
+            login=login, password=password,
+            cookies=cookies, scan_folders=folders,
+        )
         photos = client.find_photos_by_date(day, month)
 
         if not photos:

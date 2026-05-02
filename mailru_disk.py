@@ -49,20 +49,39 @@ class MailRuClient:
     PHOTO_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.heic', '.heif', '.webp', '.gif', '.bmp')
     VIDEO_EXTENSIONS = ('.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.m4v', '.3gp')
 
-    def __init__(self, login: str, password: str, scan_folders: Optional[List[str]] = None):
-        if not login or '@' not in login:
-            raise ValueError("Логин Mail.ru должен быть в формате email")
-        if not password or len(password) < 4:
-            raise ValueError("Некорректный пароль Mail.ru")
+    def __init__(self, login: Optional[str] = None, password: Optional[str] = None,
+                 cookies: Optional[str] = None, scan_folders: Optional[List[str]] = None):
+        """
+        Поддерживает два способа авторизации:
+
+        1. Через cookies (РЕКОМЕНДУЕТСЯ для GitHub Actions):
+           cookies=`Mpop=xxx; act=yyy; sdcs=zzz` — строка из DevTools.
+           Mail.ru не требует капчу, потому что мы пропускаем шаг логина
+           и используем уже готовую сессию.
+
+        2. Через login/password:
+           Работает локально, но почти всегда проваливается с GitHub Actions
+           IP из-за reCAPTCHA защиты Mail.ru.
+
+        Если переданы И cookies И login/password — приоритет у cookies.
+        """
+        if not cookies and not (login and password):
+            raise ValueError(
+                "Укажи cookies (рекомендуется) или login+password.\n"
+                "См. README раздел 'Cookie auth' — как достать cookies из браузера."
+            )
 
         self.login = login
         self.password = password
-        # По умолчанию сканируем корень. Можно передать список папок,
-        # чтобы ограничить сканирование (например, ['/Семейные фото', '/2024'])
+        self.cookies_input = cookies.strip() if cookies else None
         self.scan_folders = scan_folders or ['/']
 
-        domain = login.split('@')[1].lower()
-        self.domain = self.DOMAIN_MAP.get(domain, 'mail.ru')
+        # Домен для login/password flow (если cookies нет)
+        if login and '@' in login:
+            domain_part = login.split('@')[1].lower()
+            self.domain = self.DOMAIN_MAP.get(domain_part, 'mail.ru')
+        else:
+            self.domain = 'mail.ru'
 
         self.session = requests.Session()
         self.session.headers.update({
@@ -77,10 +96,65 @@ class MailRuClient:
         self.dispatcher_url: Optional[str] = None
         self._authenticated = False
 
-        masked = f"{login[:3]}***{login[login.index('@'):]}"
-        logger.info(f"✅ MailRuClient инициализирован (логин: {masked}, домен: {self.domain})")
+        if self.cookies_input:
+            logger.info("✅ MailRuClient инициализирован (auth: cookies)")
+        else:
+            masked = f"{login[:3]}***{login[login.index('@'):]}"
+            logger.info(f"✅ MailRuClient инициализирован (auth: login/password, {masked})")
+
+    @staticmethod
+    def _parse_cookie_string(cookie_str: str) -> Dict[str, str]:
+        """Парсит строку 'name1=val1; name2=val2' в dict."""
+        result = {}
+        for pair in cookie_str.split(';'):
+            pair = pair.strip()
+            if '=' in pair:
+                name, value = pair.split('=', 1)
+                name = name.strip()
+                value = value.strip()
+                if name and value:
+                    result[name] = value
+        return result
 
     def _authenticate(self) -> None:
+        """Авторизация: либо через cookies, либо через login/password."""
+        if self.cookies_input:
+            self._auth_via_cookies()
+        else:
+            self._auth_via_login()
+
+        # Общий шаг для обоих способов: получить CSRF + dispatcher URL
+        self._fetch_csrf_and_dispatcher()
+        self._authenticated = True
+        logger.info("✅ Авторизация в Mail.ru завершена")
+
+    def _auth_via_cookies(self) -> None:
+        """Применяет переданные cookies к сессии. Логин не делаем."""
+        logger.info("🍪 Авторизация через cookies...")
+
+        cookies_dict = self._parse_cookie_string(self.cookies_input)
+
+        if not cookies_dict:
+            raise RuntimeError(
+                "Не удалось распарсить cookies. Ожидается формат:\n"
+                "  Mpop=значение; act=значение; sdcs=значение"
+            )
+
+        if 'Mpop' not in cookies_dict:
+            raise RuntimeError(
+                f"❌ В cookies нет 'Mpop' — главного куки сессии Mail.ru.\n"
+                f"   Найдены только: {list(cookies_dict.keys())}\n"
+                f"   Скопируй cookies заново из DevTools, обязательно с Mpop."
+            )
+
+        # Mail.ru cookies живут на домене .mail.ru
+        for name, value in cookies_dict.items():
+            self.session.cookies.set(name, value, domain='.mail.ru')
+
+        logger.info(f"🍪 Установлено {len(cookies_dict)} cookies: "
+                    f"{', '.join(cookies_dict.keys())}")
+
+    def _auth_via_login(self) -> None:
         """Логинимся в Mail.ru, получаем CSRF и dispatcher URL."""
         logger.info("🔐 Авторизация в Mail.ru...")
 
@@ -138,17 +212,16 @@ class MailRuClient:
             logger.error("─" * 60)
 
             raise RuntimeError(
-                "❌ Не получен Mpop cookie. Самые частые причины:\n"
-                "  • App password Mail.ru работает для IMAP/SMTP, но НЕ для cloud.mail.ru.\n"
-                "    Если 2FA включена и app password не пускает — нужен fallback через\n"
-                "    cookies из браузера (см. README раздел 'Cookie auth')\n"
-                "  • Mail.ru может требовать капчу при первом входе с GitHub Actions IP —\n"
-                "    зайди один раз в браузере с того же аккаунта, потом попробуй снова\n"
-                "  • Неверный логин/пароль\n"
+                "❌ Не получен Mpop cookie. Login/password подход почти всегда\n"
+                "  упирается в reCAPTCHA на GitHub Actions IP — используй cookie auth.\n"
                 "  Подробная диагностика выше в логах ↑"
             )
 
-        # 2. Получаем SDCS cookie (нужно для cloud.mail.ru)
+        logger.info("✅ Login/password успешный, Mpop получен")
+
+    def _fetch_csrf_and_dispatcher(self) -> None:
+        """Получает CSRF токен и dispatcher URL. Общий шаг для cookie и login auth."""
+        # 1. Тыкаем cloud.mail.ru, чтобы получить sdcs/прочие cookies
         try:
             self.session.get(
                 f'{self.CLOUD_URL}/?from=promo',
@@ -156,23 +229,43 @@ class MailRuClient:
                 allow_redirects=True,
             )
         except requests.exceptions.RequestException as e:
-            logger.warning(f"⚠️ Не удалось получить SDCS cookie: {e}")
+            logger.warning(f"⚠️ Не удалось обновить cookies cloud.mail.ru: {e}")
 
-        # 3. CSRF токен
+        # 2. CSRF токен. Если cookies протухшие — здесь обычно и ловим.
         try:
             csrf_resp = self.session.get(
                 f'{self.API_URL}/tokens/csrf',
                 timeout=self.REQUEST_TIMEOUT,
             )
+        except requests.exceptions.RequestException as e:
+            raise RuntimeError(f"Сетевая ошибка при получении CSRF: {e}")
+
+        if csrf_resp.status_code in (401, 403):
+            raise RuntimeError(
+                f"❌ CSRF endpoint отдал {csrf_resp.status_code} — "
+                f"cookies протухли или невалидны.\n"
+                f"  Зайди в cloud.mail.ru в браузере и обнови секрет MAILRU_COOKIES."
+            )
+
+        try:
             csrf_resp.raise_for_status()
             self.csrf_token = csrf_resp.json().get('body', {}).get('token')
         except (requests.exceptions.RequestException, ValueError) as e:
+            # Если вернулся HTML вместо JSON — cookies невалидны
+            if csrf_resp.text and csrf_resp.text.lstrip()[:1] == '<':
+                raise RuntimeError(
+                    "❌ CSRF endpoint вернул HTML вместо JSON — "
+                    "cookies протухли или невалидны.\n"
+                    "  Обнови секрет MAILRU_COOKIES."
+                )
             raise RuntimeError(f"Не удалось получить CSRF токен: {e}")
 
         if not self.csrf_token:
-            raise RuntimeError("CSRF токен пустой — проверь авторизацию")
+            raise RuntimeError(
+                "CSRF токен пустой — cookies невалидны или протухли"
+            )
 
-        # 4. Dispatcher URL для скачивания
+        # 3. Dispatcher URL для скачивания
         try:
             disp_resp = self.session.get(
                 f'{self.API_URL}/dispatcher',
@@ -188,8 +281,7 @@ class MailRuClient:
         except (requests.exceptions.RequestException, ValueError, KeyError, IndexError) as e:
             raise RuntimeError(f"Не удалось получить dispatcher URL: {e}")
 
-        self._authenticated = True
-        logger.info(f"✅ Авторизация в Mail.ru успешна (dispatcher: {self.dispatcher_url[:30]}...)")
+        logger.debug(f"   CSRF токен получен, dispatcher: {self.dispatcher_url[:40]}...")
 
     def find_photos_by_date(self, day: int, month: int) -> List[Dict]:
         if not 1 <= day <= 31:

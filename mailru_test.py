@@ -146,6 +146,7 @@ def main():
 
     login = os.getenv('MAILRU_LOGIN')
     password = os.getenv('MAILRU_PASSWORD')
+    cookies = os.getenv('MAILRU_COOKIES')
     folders_override = os.getenv('MAILRU_FOLDERS_OVERRIDE', '').strip()
     folders_default = os.getenv('MAILRU_FOLDERS', '/').strip()
     folders_raw = folders_override if folders_override else folders_default
@@ -154,8 +155,9 @@ def main():
     tg_token = os.getenv('TELEGRAM_BOT_TOKEN')
     tg_chat = os.getenv('TELEGRAM_TEST_CHAT_ID') or os.getenv('TELEGRAM_CHAT_ID')
 
-    if not login or not password:
-        logger.error("❌ MAILRU_LOGIN и MAILRU_PASSWORD обязательны")
+    if not cookies and not (login and password):
+        logger.error("❌ Нужны либо MAILRU_COOKIES (рекомендуется),")
+        logger.error("   либо MAILRU_LOGIN + MAILRU_PASSWORD")
         sys.exit(1)
 
     folders = [f.strip() for f in folders_raw.split(',') if f.strip()]
@@ -164,6 +166,7 @@ def main():
     logger.info(f"🔧 Режим: {mode}")
     logger.info(f"🔧 Дата: {date_label}")
     logger.info(f"🔧 Папки: {folders}")
+    logger.info(f"🔧 Auth: {'cookies' if cookies else 'login/password'}")
     if mode == 'send_one':
         logger.info(f"🔧 Telegram чат: {tg_chat}")
 
@@ -173,15 +176,22 @@ def main():
     print("Шаг 1/4: Авторизация в Mail.ru")
     print("─" * 70)
     try:
-        client = MailRuClient(login, password, scan_folders=folders)
+        client = MailRuClient(
+            login=login, password=password,
+            cookies=cookies, scan_folders=folders,
+        )
         client._authenticate()
         logger.info("✅ Авторизация прошла успешно")
     except Exception as e:
         logger.error(f"❌ Авторизация не удалась: {e}")
-        logger.error("   Проверь:")
-        logger.error("   • MAILRU_LOGIN — полный email (например, family@mail.ru)")
-        logger.error("   • MAILRU_PASSWORD — пароль для приложений, не основной")
-        logger.error("   • Включена ли 2FA — без app password не залогинишься")
+        if cookies:
+            logger.error("   Проверь MAILRU_COOKIES — возможно протухли,")
+            logger.error("   зайди в cloud.mail.ru в браузере и обнови секрет.")
+        else:
+            logger.error("   Проверь:")
+            logger.error("   • MAILRU_LOGIN — полный email (например, family@mail.ru)")
+            logger.error("   • MAILRU_PASSWORD — пароль для приложений, не основной")
+            logger.error("   • Включена ли 2FA — без app password не залогинишься")
         sys.exit(1)
 
     # --- Шаг 2: листинг папок ---
