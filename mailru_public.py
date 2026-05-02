@@ -97,7 +97,12 @@ class MailRuPublicClient:
         return weblink
 
     def _ensure_dispatcher(self) -> None:
-        """Получает URL CDN-сервера для скачивания. Кешируется в self."""
+        """Получает URL CDN-сервера для скачивания. Кешируется в self.
+
+        Для публичных файлов Mail.ru использует специальный ключ `weblink_get`
+        (URL вида `/public/...`), а не общий `get` (URL вида `/attach/...`,
+        который для авторизованных файлов пользователя).
+        """
         if self.dispatcher_url:
             return
         try:
@@ -107,13 +112,23 @@ class MailRuPublicClient:
             )
             resp.raise_for_status()
             data = resp.json().get('body', {})
-            get_urls = data.get('get', [])
-            if not get_urls:
-                raise RuntimeError("Dispatcher не вернул URL для скачивания")
-            self.dispatcher_url = get_urls[0]['url']
-            logger.debug(f"   Dispatcher URL: {self.dispatcher_url[:40]}...")
-        except (requests.exceptions.RequestException, ValueError, KeyError, IndexError) as e:
-            raise RuntimeError(f"Не удалось получить dispatcher URL: {e}")
+        except (requests.exceptions.RequestException, ValueError) as e:
+            raise RuntimeError(f"Не удалось получить dispatcher: {e}")
+
+        logger.debug(f"   Dispatcher response keys: {list(data.keys())}")
+
+        # Приоритет: weblink_get (для публичных) → get (legacy fallback)
+        for key in ('weblink_get', 'get'):
+            urls = data.get(key, [])
+            if urls and urls[0].get('url'):
+                self.dispatcher_url = urls[0]['url']
+                logger.info(f"   Dispatcher ({key}): {self.dispatcher_url[:50]}...")
+                return
+
+        raise RuntimeError(
+            f"Dispatcher не вернул ни weblink_get, ни get URL. "
+            f"Доступные ключи: {list(data.keys())}"
+        )
 
     def find_photos_by_date(self, day: int, month: int) -> List[Dict]:
         if not 1 <= day <= 31:
@@ -243,32 +258,76 @@ class MailRuPublicClient:
         return photos
 
     def download_photo(self, photo: Dict) -> Optional[bytes]:
-        """Скачивает фото через dispatcher. Cookies/auth не нужны."""
+        """Скачивает фото через dispatcher. Cookies/auth не нужны.
+
+        Если dispatcher URL не сработал — пробуем прямой URL
+        cloud.mail.ru/public/<weblink>?download=1 (тот, что использует
+        кнопка «Скачать» на сайте).
+        """
         weblink = photo.get('weblink')
         name = photo.get('name', 'unknown')
         if not weblink:
             logger.warning(f"⚠️ Нет weblink для {name}")
             return None
 
-        self._ensure_dispatcher()
-
-        # URL = dispatcher + weblink файла. Mail.ru сам отдаст байты.
-        download_url = f"{self.dispatcher_url}{quote(weblink, safe='/')}"
+        # Стратегия 1: dispatcher URL (быстрее, через CDN)
         try:
-            resp = self.session.get(download_url, timeout=60, stream=True)
-            resp.raise_for_status()
+            self._ensure_dispatcher()
+            url1 = f"{self.dispatcher_url}{quote(weblink, safe='/')}"
+            data = self._try_download(url1, name, strategy='dispatcher')
+            if data:
+                return data
+        except RuntimeError as e:
+            logger.warning(f"⚠️ Dispatcher не сработал: {e}")
+
+        # Стратегия 2: прямая ссылка через cloud.mail.ru/public/...
+        # Это URL который Mail.ru использует когда нажимаешь «Скачать»
+        # в браузере. Медленнее (через основной домен), но надёжнее.
+        url2 = f"https://cloud.mail.ru/public/{quote(weblink, safe='/')}"
+        logger.info(f"🔄 Пробуем прямую ссылку для {name}")
+        data = self._try_download(url2, name, strategy='direct',
+                                  follow_redirects=True)
+        if data:
+            return data
+
+        logger.error(f"❌ Не удалось скачать {name} ни одной из стратегий")
+        return None
+
+    def _try_download(self, url: str, name: str, strategy: str,
+                      follow_redirects: bool = True) -> Optional[bytes]:
+        """Пытается скачать по URL. Возвращает None если не получилось."""
+        try:
+            resp = self.session.get(
+                url, timeout=60, stream=True,
+                allow_redirects=follow_redirects,
+            )
+
+            if resp.status_code != 200:
+                # Подробная диагностика для 403/404 — что именно сказал Mail.ru
+                logger.warning(
+                    f"⚠️ {strategy} вернул {resp.status_code} для {name}"
+                )
+                logger.debug(f"   URL: {url[:120]}")
+                logger.debug(f"   Headers: Server={resp.headers.get('Server')}, "
+                             f"Content-Type={resp.headers.get('Content-Type')}")
+                body_preview = resp.text[:200] if resp.text else '(пусто)'
+                logger.debug(f"   Body: {body_preview}")
+                return None
+
             data = resp.content
             if len(data) < 100:
                 logger.warning(f"⚠️ Слишком маленький файл ({len(data)} байт): {name}")
                 return None
             if data[:5] in (b'<!DOC', b'<html', b'<HTML'):
-                logger.error(f"❌ Получен HTML вместо изображения для {name} — "
-                             f"возможно ссылка отозвана")
+                logger.warning(
+                    f"⚠️ {strategy} вернул HTML вместо изображения для {name}"
+                )
                 return None
-            logger.debug(f"📥 Скачано {len(data)} байт: {name}")
+            logger.info(f"📥 {strategy}: скачано {len(data)} байт для {name}")
             return data
+
         except requests.exceptions.RequestException as e:
-            logger.error(f"❌ Ошибка скачивания {name}: {e}")
+            logger.warning(f"⚠️ {strategy} упал: {e}")
             return None
 
     # ─── Парсинг даты — переиспользует логику с auth-based клиентом ───────
