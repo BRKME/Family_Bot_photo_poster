@@ -1,0 +1,88 @@
+name: Test Mail.ru Integration
+
+# Только ручной запуск, без расписания
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Режим теста'
+        required: true
+        type: choice
+        default: 'diagnose'
+        options:
+          - diagnose
+          - download_test
+          - send_one
+      
+      test_date:
+        description: 'Дата для поиска (DD.MM, пусто = сегодня). Пример: 15.07'
+        required: false
+        type: string
+        default: ''
+      
+      folders_override:
+        description: 'Папки для скана (через запятую, пусто = MAILRU_FOLDERS секрет)'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  test-mailru:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Cache pip packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Show test configuration
+        run: |
+          echo "═══════════════════════════════════════"
+          echo "🧪 ТЕСТ Mail.ru Integration"
+          echo "═══════════════════════════════════════"
+          echo "Режим:           ${{ inputs.mode }}"
+          echo "Дата:            ${{ inputs.test_date || 'сегодня' }}"
+          echo "Папки override:  ${{ inputs.folders_override || '(используются из MAILRU_FOLDERS секрета)' }}"
+          echo "═══════════════════════════════════════"
+      
+      - name: Run Mail.ru test
+        env:
+          TEST_MODE: ${{ inputs.mode }}
+          TEST_DATE: ${{ inputs.test_date }}
+          MAILRU_FOLDERS_OVERRIDE: ${{ inputs.folders_override }}
+          MAILRU_LOGIN: ${{ secrets.MAILRU_LOGIN }}
+          MAILRU_PASSWORD: ${{ secrets.MAILRU_PASSWORD }}
+          MAILRU_FOLDERS: ${{ secrets.MAILRU_FOLDERS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Опциональный отдельный чат для тестов (если хочешь не спамить семейный)
+          TELEGRAM_TEST_CHAT_ID: ${{ secrets.TELEGRAM_TEST_CHAT_ID }}
+        run: |
+          python mailru_test.py
+      
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mailru-test-logs-${{ github.run_id }}
+          path: |
+            mailru_test.log
+          retention-days: 14
