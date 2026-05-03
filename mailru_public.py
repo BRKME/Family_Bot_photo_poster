@@ -141,7 +141,12 @@ class MailRuPublicClient:
         all_photos: List[Dict] = []
         for weblink in self.weblinks:
             try:
-                photos = self._scan_public_folder(weblink, day, month)
+                # root_weblink — это weblink самой расшаренной папки.
+                # Передаём его вглубь рекурсии, чтобы потом для скачивания
+                # знать какой префикс отрезать от weblink файла.
+                photos = self._scan_public_folder(
+                    weblink, day, month, root_weblink=weblink,
+                )
                 all_photos.extend(photos)
             except Exception as e:
                 logger.error(f"❌ [Mail.ru public] Ошибка обхода {weblink}: {e}")
@@ -155,6 +160,7 @@ class MailRuPublicClient:
         return result
 
     def _scan_public_folder(self, weblink: str, day: int, month: int,
+                            root_weblink: str,
                             depth: int = 0, max_depth: int = 10) -> List[Dict]:
         if depth > max_depth:
             logger.warning(f"⚠️ Достигнута макс. глубина рекурсии на {weblink}")
@@ -208,6 +214,7 @@ class MailRuPublicClient:
                             try:
                                 photos.extend(self._scan_public_folder(
                                     item_weblink, day, month,
+                                    root_weblink=root_weblink,
                                     depth=depth + 1, max_depth=max_depth,
                                 ))
                             except Exception as e:
@@ -229,6 +236,7 @@ class MailRuPublicClient:
                             'name': item_name,
                             'path': item_home or item_name,
                             'weblink': item_weblink,
+                            'root_weblink': root_weblink,  # для построения download URL
                             'date': photo_date,
                             'year': photo_date.year,
                             'size': item.get('size', 0),
@@ -260,20 +268,36 @@ class MailRuPublicClient:
     def download_photo(self, photo: Dict) -> Optional[bytes]:
         """Скачивает фото через dispatcher. Cookies/auth не нужны.
 
-        Если dispatcher URL не сработал — пробуем прямой URL
-        cloud.mail.ru/public/<weblink>?download=1 (тот, что использует
-        кнопка «Скачать» на сайте).
+        Особенность: dispatcher выдаёт URL уже с сессионным токеном вида
+        https://cloclo.cloud.mail.ru/public/<токен>/
+        К нему дописывается ОТНОСИТЕЛЬНЫЙ путь файла внутри расшаренной папки,
+        а НЕ полный weblink (полный = root_weblink + относительный путь).
+
+        Пример:
+            root_weblink   = '7192/RDJK5axoi'
+            file_weblink   = '7192/RDJK5axoi/Турция/Кемер 05-2008/IMG_3056.jpg'
+            relative       = 'Турция/Кемер 05-2008/IMG_3056.jpg'
+            download_url   = '<dispatcher>/Турция/Кемер 05-2008/IMG_3056.jpg'
         """
         weblink = photo.get('weblink')
+        root_weblink = photo.get('root_weblink')
         name = photo.get('name', 'unknown')
         if not weblink:
             logger.warning(f"⚠️ Нет weblink для {name}")
             return None
 
+        # Вычисляем относительный путь файла внутри корневой расшаренной папки
+        if root_weblink and weblink.startswith(root_weblink):
+            relative_path = weblink[len(root_weblink):].lstrip('/')
+        else:
+            # Если по какой-то причине не смогли — fallback на полный weblink
+            logger.debug(f"   root_weblink не префикс weblink, использую полный путь")
+            relative_path = weblink
+
         # Стратегия 1: dispatcher URL (быстрее, через CDN)
         try:
             self._ensure_dispatcher()
-            url1 = f"{self.dispatcher_url}{quote(weblink, safe='/')}"
+            url1 = f"{self.dispatcher_url}{quote(relative_path, safe='/')}"
             data = self._try_download(url1, name, strategy='dispatcher')
             if data:
                 return data
@@ -281,8 +305,7 @@ class MailRuPublicClient:
             logger.warning(f"⚠️ Dispatcher не сработал: {e}")
 
         # Стратегия 2: прямая ссылка через cloud.mail.ru/public/...
-        # Это URL который Mail.ru использует когда нажимаешь «Скачать»
-        # в браузере. Медленнее (через основной домен), но надёжнее.
+        # Используем ПОЛНЫЙ weblink — это путь, который Mail.ru знает в URL
         url2 = f"https://cloud.mail.ru/public/{quote(weblink, safe='/')}"
         logger.info(f"🔄 Пробуем прямую ссылку для {name}")
         data = self._try_download(url2, name, strategy='direct',
