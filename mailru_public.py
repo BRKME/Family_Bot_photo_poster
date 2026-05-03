@@ -99,9 +99,9 @@ class MailRuPublicClient:
     def _ensure_dispatcher(self) -> None:
         """Получает URL CDN-сервера для скачивания. Кешируется в self.
 
-        Для публичных файлов Mail.ru использует специальный ключ `weblink_get`
-        (URL вида `/public/...`), а не общий `get` (URL вида `/attach/...`,
-        который для авторизованных файлов пользователя).
+        Mail.ru для публичных файлов отдаёт URL вида
+        https://cloclo<N>.cloud.mail.ru/public/<token>/g/no
+        К нему нужно дописать `/<relative_path>` (с ведущим слэшем!).
         """
         if self.dispatcher_url:
             return
@@ -115,14 +115,19 @@ class MailRuPublicClient:
         except (requests.exceptions.RequestException, ValueError) as e:
             raise RuntimeError(f"Не удалось получить dispatcher: {e}")
 
-        logger.debug(f"   Dispatcher response keys: {list(data.keys())}")
+        # Логируем все доступные ключи — на случай если Mail.ru добавит/уберёт
+        logger.info(f"   Dispatcher endpoints доступны: {list(data.keys())}")
 
         # Приоритет: weblink_get (для публичных) → get (legacy fallback)
         for key in ('weblink_get', 'get'):
             urls = data.get(key, [])
             if urls and urls[0].get('url'):
-                self.dispatcher_url = urls[0]['url']
-                logger.info(f"   Dispatcher ({key}): {self.dispatcher_url[:50]}...")
+                # Гарантируем что URL заканчивается на '/' для корректной склейки
+                url = urls[0]['url']
+                if not url.endswith('/'):
+                    url += '/'
+                self.dispatcher_url = url
+                logger.info(f"   Dispatcher ({key}): {self.dispatcher_url}")
                 return
 
         raise RuntimeError(
@@ -291,32 +296,40 @@ class MailRuPublicClient:
 
         strategies = []
         if self.dispatcher_url:
-            # A: dispatcher + relative path
+            # Dispatcher URL уже гарантированно заканчивается на '/' (см. _ensure_dispatcher)
+            # Поэтому добавляем path БЕЗ ведущего слэша
+            relative_path_clean = relative_path.lstrip('/')
+            weblink_clean = weblink.lstrip('/')
+
+            # A: dispatcher + relative path (правильный для публичных)
             strategies.append((
                 'dispatcher_relative',
-                f"{self.dispatcher_url}{quote(relative_path, safe='/')}",
+                f"{self.dispatcher_url}{quote(relative_path_clean, safe='/')}",
             ))
-            # B: dispatcher + ?weblink=<full>
-            strategies.append((
-                'dispatcher_query',
-                f"{self.dispatcher_url}?weblink={quote(weblink, safe='/')}",
-            ))
-            # C: dispatcher + полный weblink (старая попытка)
+            # B: dispatcher + полный weblink
             strategies.append((
                 'dispatcher_full',
-                f"{self.dispatcher_url}{quote(weblink, safe='/')}",
+                f"{self.dispatcher_url}{quote(weblink_clean, safe='/')}",
+            ))
+            # C: dispatcher + ?weblink=<full>
+            strategies.append((
+                'dispatcher_query',
+                f"{self.dispatcher_url}?weblink={quote(weblink_clean, safe='/')}",
             ))
 
-        # D: webdav-style на основном домене с query
+        # D: публичная страница с ?download=1 — этот параметр использует
+        #    кнопка «Скачать» в браузере. Mail.ru должен отдать редирект на
+        #    реальный CDN URL.
+        weblink_clean = weblink.lstrip('/')
         strategies.append((
-            'cloud_query',
-            f"https://cloud.mail.ru/api/v2/file/download_url?weblink={quote(weblink, safe='/')}",
+            'public_download',
+            f"https://cloud.mail.ru/public/{quote(weblink_clean, safe='/')}?download=1",
         ))
 
-        # E: прямая страница (последний шанс)
+        # E: webdav-style endpoint
         strategies.append((
-            'cloud_public',
-            f"https://cloud.mail.ru/public/{quote(weblink, safe='/')}",
+            'webdav',
+            f"https://webdav.cloud.mail.ru/{quote(weblink_clean, safe='/')}",
         ))
 
         for name_strat, url in strategies:
