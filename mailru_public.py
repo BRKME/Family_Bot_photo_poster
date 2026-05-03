@@ -296,40 +296,27 @@ class MailRuPublicClient:
 
         strategies = []
         if self.dispatcher_url:
-            # Dispatcher URL уже гарантированно заканчивается на '/' (см. _ensure_dispatcher)
-            # Поэтому добавляем path БЕЗ ведущего слэша
-            relative_path_clean = relative_path.lstrip('/')
             weblink_clean = weblink.lstrip('/')
+            relative_clean = relative_path.lstrip('/')
 
-            # A: dispatcher + relative path (правильный для публичных)
-            strategies.append((
-                'dispatcher_relative',
-                f"{self.dispatcher_url}{quote(relative_path_clean, safe='/')}",
-            ))
-            # B: dispatcher + полный weblink
+            # ОСНОВНАЯ стратегия: dispatcher + полный weblink (включая root prefix).
+            # Подтверждено экспериментально: Mail.ru ожидает именно так.
             strategies.append((
                 'dispatcher_full',
                 f"{self.dispatcher_url}{quote(weblink_clean, safe='/')}",
             ))
-            # C: dispatcher + ?weblink=<full>
+            # Fallback: dispatcher + только relative path (на случай если Mail.ru
+            # когда-то изменит формат)
             strategies.append((
-                'dispatcher_query',
-                f"{self.dispatcher_url}?weblink={quote(weblink_clean, safe='/')}",
+                'dispatcher_relative',
+                f"{self.dispatcher_url}{quote(relative_clean, safe='/')}",
             ))
 
-        # D: публичная страница с ?download=1 — этот параметр использует
-        #    кнопка «Скачать» в браузере. Mail.ru должен отдать редирект на
-        #    реальный CDN URL.
+        # Запасная стратегия — публичная страница с ?download=1
         weblink_clean = weblink.lstrip('/')
         strategies.append((
             'public_download',
             f"https://cloud.mail.ru/public/{quote(weblink_clean, safe='/')}?download=1",
-        ))
-
-        # E: webdav-style endpoint
-        strategies.append((
-            'webdav',
-            f"https://webdav.cloud.mail.ru/{quote(weblink_clean, safe='/')}",
         ))
 
         for name_strat, url in strategies:
