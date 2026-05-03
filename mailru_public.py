@@ -266,19 +266,7 @@ class MailRuPublicClient:
         return photos
 
     def download_photo(self, photo: Dict) -> Optional[bytes]:
-        """Скачивает фото через dispatcher. Cookies/auth не нужны.
-
-        Особенность: dispatcher выдаёт URL уже с сессионным токеном вида
-        https://cloclo.cloud.mail.ru/public/<токен>/
-        К нему дописывается ОТНОСИТЕЛЬНЫЙ путь файла внутри расшаренной папки,
-        а НЕ полный weblink (полный = root_weblink + относительный путь).
-
-        Пример:
-            root_weblink   = '7192/RDJK5axoi'
-            file_weblink   = '7192/RDJK5axoi/Турция/Кемер 05-2008/IMG_3056.jpg'
-            relative       = 'Турция/Кемер 05-2008/IMG_3056.jpg'
-            download_url   = '<dispatcher>/Турция/Кемер 05-2008/IMG_3056.jpg'
-        """
+        """Скачивает фото несколькими стратегиями, пока что-то не сработает."""
         weblink = photo.get('weblink')
         root_weblink = photo.get('root_weblink')
         name = photo.get('name', 'unknown')
@@ -286,34 +274,59 @@ class MailRuPublicClient:
             logger.warning(f"⚠️ Нет weblink для {name}")
             return None
 
-        # Вычисляем относительный путь файла внутри корневой расшаренной папки
+        # Относительный путь файла внутри корневой расшаренной папки
         if root_weblink and weblink.startswith(root_weblink):
             relative_path = weblink[len(root_weblink):].lstrip('/')
         else:
-            # Если по какой-то причине не смогли — fallback на полный weblink
-            logger.debug(f"   root_weblink не префикс weblink, использую полный путь")
             relative_path = weblink
 
-        # Стратегия 1: dispatcher URL (быстрее, через CDN)
+        logger.info(f"   weblink: {weblink}")
+        logger.info(f"   root: {root_weblink}, relative: {relative_path}")
+
+        # Получаем dispatcher один раз
         try:
             self._ensure_dispatcher()
-            url1 = f"{self.dispatcher_url}{quote(relative_path, safe='/')}"
-            data = self._try_download(url1, name, strategy='dispatcher')
+        except RuntimeError as e:
+            logger.warning(f"⚠️ Dispatcher не получен: {e}")
+
+        strategies = []
+        if self.dispatcher_url:
+            # A: dispatcher + relative path
+            strategies.append((
+                'dispatcher_relative',
+                f"{self.dispatcher_url}{quote(relative_path, safe='/')}",
+            ))
+            # B: dispatcher + ?weblink=<full>
+            strategies.append((
+                'dispatcher_query',
+                f"{self.dispatcher_url}?weblink={quote(weblink, safe='/')}",
+            ))
+            # C: dispatcher + полный weblink (старая попытка)
+            strategies.append((
+                'dispatcher_full',
+                f"{self.dispatcher_url}{quote(weblink, safe='/')}",
+            ))
+
+        # D: webdav-style на основном домене с query
+        strategies.append((
+            'cloud_query',
+            f"https://cloud.mail.ru/api/v2/file/download_url?weblink={quote(weblink, safe='/')}",
+        ))
+
+        # E: прямая страница (последний шанс)
+        strategies.append((
+            'cloud_public',
+            f"https://cloud.mail.ru/public/{quote(weblink, safe='/')}",
+        ))
+
+        for name_strat, url in strategies:
+            logger.info(f"🔄 Пробуем '{name_strat}': {url[:150]}")
+            data = self._try_download(url, name, strategy=name_strat,
+                                      follow_redirects=True)
             if data:
                 return data
-        except RuntimeError as e:
-            logger.warning(f"⚠️ Dispatcher не сработал: {e}")
 
-        # Стратегия 2: прямая ссылка через cloud.mail.ru/public/...
-        # Используем ПОЛНЫЙ weblink — это путь, который Mail.ru знает в URL
-        url2 = f"https://cloud.mail.ru/public/{quote(weblink, safe='/')}"
-        logger.info(f"🔄 Пробуем прямую ссылку для {name}")
-        data = self._try_download(url2, name, strategy='direct',
-                                  follow_redirects=True)
-        if data:
-            return data
-
-        logger.error(f"❌ Не удалось скачать {name} ни одной из стратегий")
+        logger.error(f"❌ Не удалось скачать {name} ни одной из {len(strategies)} стратегий")
         return None
 
     def _try_download(self, url: str, name: str, strategy: str,
@@ -326,16 +339,35 @@ class MailRuPublicClient:
             )
 
             if resp.status_code != 200:
-                # Подробная диагностика для 403/404 — что именно сказал Mail.ru
                 logger.warning(
-                    f"⚠️ {strategy} вернул {resp.status_code} для {name}"
+                    f"⚠️ {strategy} → HTTP {resp.status_code} для {name}"
                 )
-                logger.debug(f"   URL: {url[:120]}")
-                logger.debug(f"   Headers: Server={resp.headers.get('Server')}, "
-                             f"Content-Type={resp.headers.get('Content-Type')}")
-                body_preview = resp.text[:200] if resp.text else '(пусто)'
-                logger.debug(f"   Body: {body_preview}")
+                # Поднимаем диагностику до WARNING чтобы видеть в логах
+                logger.warning(f"   Final URL: {resp.url[:200]}")
+                logger.warning(f"   Server: {resp.headers.get('Server')}, "
+                               f"Content-Type: {resp.headers.get('Content-Type')}")
+                body_preview = resp.text[:300] if resp.text else '(пусто)'
+                logger.warning(f"   Body: {body_preview}")
                 return None
+
+            # Иногда Mail.ru API отдаёт JSON с ссылкой вместо самого файла
+            content_type = resp.headers.get('Content-Type', '').lower()
+            if 'json' in content_type:
+                try:
+                    js = resp.json()
+                    logger.info(f"   {strategy} вернул JSON: {str(js)[:300]}")
+                    # Пробуем вытащить url из тела
+                    body = js.get('body', {})
+                    if isinstance(body, dict) and body.get('url'):
+                        download_url = body['url']
+                        logger.info(f"🔗 Получили временный URL, скачиваю...")
+                        return self._try_download(
+                            download_url, name,
+                            strategy=f'{strategy}+follow',
+                            follow_redirects=True,
+                        )
+                except ValueError:
+                    pass
 
             data = resp.content
             if len(data) < 100:
@@ -345,8 +377,9 @@ class MailRuPublicClient:
                 logger.warning(
                     f"⚠️ {strategy} вернул HTML вместо изображения для {name}"
                 )
+                logger.warning(f"   First 200 chars: {data[:200].decode('utf-8', 'replace')}")
                 return None
-            logger.info(f"📥 {strategy}: скачано {len(data)} байт для {name}")
+            logger.info(f"📥 ✅ {strategy}: скачано {len(data)} байт для {name}")
             return data
 
         except requests.exceptions.RequestException as e:
