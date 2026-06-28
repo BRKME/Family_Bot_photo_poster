@@ -143,33 +143,52 @@ class MailRuPublicClient:
 
         logger.info(f"🔍 [Mail.ru public] Начинаем поиск фото за {day}.{month:02d}")
 
+        # Сквозная статистика для всех вложенных вызовов
+        stats = {'photos_total': 0, 'photos_with_date': 0,
+                 'photos_matched': 0, 'logged_sample': False}
+
         all_photos: List[Dict] = []
         for weblink in self.weblinks:
             try:
-                # root_weblink — это weblink самой расшаренной папки.
-                # Передаём его вглубь рекурсии, чтобы потом для скачивания
-                # знать какой префикс отрезать от weblink файла.
                 photos = self._scan_public_folder(
-                    weblink, day, month, root_weblink=weblink,
+                    weblink, day, month, root_weblink=weblink, stats=stats,
                 )
                 all_photos.extend(photos)
             except Exception as e:
                 logger.error(f"❌ [Mail.ru public] Ошибка обхода {weblink}: {e}")
 
-        # Дедуп по weblink файла (на случай если одна папка попала через две ссылки)
+        # Дедуп по weblink файла
         unique = {p['weblink']: p for p in all_photos if p.get('weblink')}
         result = list(unique.values())
         result.sort(key=lambda x: x['year'])
+
+        # Итоговая статистика — поможет понять что Mail.ru поменял
+        logger.info(
+            f"📈 СТАТИСТИКА: всего фотофайлов={stats['photos_total']}, "
+            f"с определённой датой={stats['photos_with_date']}, "
+            f"подошли под {day}.{month:02d}={stats['photos_matched']}"
+        )
+        if stats['photos_total'] > 0 and stats['photos_with_date'] == 0:
+            logger.error(
+                "⚠️ НИ ОДНО фото не получило дату! Скорее всего Mail.ru "
+                "изменил формат API — поле 'mtime' переименовано или убрано. "
+                "См. блок 🔬 ДИАГНОСТИКА выше — какие поля сейчас в item."
+            )
 
         logger.info(f"✅ [Mail.ru public] Итого найдено {len(result)} фото за {day}.{month:02d}")
         return result
 
     def _scan_public_folder(self, weblink: str, day: int, month: int,
                             root_weblink: str,
-                            depth: int = 0, max_depth: int = 10) -> List[Dict]:
+                            depth: int = 0, max_depth: int = 10,
+                            stats: Optional[Dict] = None) -> List[Dict]:
         if depth > max_depth:
             logger.warning(f"⚠️ Достигнута макс. глубина рекурсии на {weblink}")
             return []
+
+        if stats is None:
+            stats = {'photos_total': 0, 'photos_with_date': 0,
+                     'photos_matched': 0, 'logged_sample': False}
 
         photos: List[Dict] = []
         offset = 0
@@ -204,6 +223,21 @@ class MailRuPublicClient:
                         logger.info(f"📂 [Mail.ru public] {weblink}: папка пустая")
                     break
 
+                # ОДНОРАЗОВО логируем сырой item с ВСЕМИ полями для диагностики.
+                # Если Mail.ru переименовал mtime — увидим это здесь.
+                if not stats['logged_sample']:
+                    for item in items:
+                        if (item.get('type') == 'file'
+                                and any(item.get('name', '').lower().endswith(ext)
+                                        for ext in self.PHOTO_EXTENSIONS)):
+                            import json
+                            logger.info(f"🔬 ДИАГНОСТИКА: пример photo-item целиком:")
+                            logger.info(
+                                f"   {json.dumps(item, ensure_ascii=False, default=str)}"
+                            )
+                            stats['logged_sample'] = True
+                            break
+
                 total += len(items)
                 logger.info(f"📊 [Mail.ru public] {weblink}: обработано {total}...")
 
@@ -214,13 +248,13 @@ class MailRuPublicClient:
                     item_home = item.get('home', '')
 
                     if item_type == 'folder':
-                        # Рекурсивно в подпапку
                         if item_weblink:
                             try:
                                 photos.extend(self._scan_public_folder(
                                     item_weblink, day, month,
                                     root_weblink=root_weblink,
                                     depth=depth + 1, max_depth=max_depth,
+                                    stats=stats,
                                 ))
                             except Exception as e:
                                 logger.error(f"❌ Не удалось войти в подпапку {item_weblink}: {e}")
@@ -232,16 +266,21 @@ class MailRuPublicClient:
                     if not name_lower.endswith(self.PHOTO_EXTENSIONS):
                         continue
 
+                    stats['photos_total'] += 1
+
                     photo_date = self._extract_date(item)
                     if not photo_date:
                         continue
 
+                    stats['photos_with_date'] += 1
+
                     if photo_date.day == day and photo_date.month == month:
+                        stats['photos_matched'] += 1
                         photos.append({
                             'name': item_name,
                             'path': item_home or item_name,
                             'weblink': item_weblink,
-                            'root_weblink': root_weblink,  # для построения download URL
+                            'root_weblink': root_weblink,
                             'date': photo_date,
                             'year': photo_date.year,
                             'size': item.get('size', 0),
