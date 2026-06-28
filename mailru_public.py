@@ -145,7 +145,8 @@ class MailRuPublicClient:
 
         # Сквозная статистика для всех вложенных вызовов
         stats = {'photos_total': 0, 'photos_with_date': 0,
-                 'photos_matched': 0, 'logged_sample': False}
+                 'photos_matched': 0, 'logged_sample': False,
+                 'by_month': {}}  # month → count, для диагностики
 
         all_photos: List[Dict] = []
         for weblink in self.weblinks:
@@ -168,6 +169,21 @@ class MailRuPublicClient:
             f"с определённой датой={stats['photos_with_date']}, "
             f"подошли под {day}.{month:02d}={stats['photos_matched']}"
         )
+        # Распределение по месяцам — показывает что в архиве реально есть.
+        # Если месяца нет в распределении — значит фото за этот месяц
+        # действительно отсутствуют в архиве, и 0 совпадений — это не баг.
+        if stats['by_month']:
+            month_names = ['янв', 'фев', 'мар', 'апр', 'май', 'июн',
+                           'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
+            distribution = ', '.join(
+                f"{month_names[m-1]}={stats['by_month'][m]}"
+                for m in sorted(stats['by_month'].keys())
+            )
+            logger.info(f"📅 По месяцам: {distribution}")
+            target_count = stats['by_month'].get(month, 0)
+            logger.info(
+                f"📅 В {month_names[month-1]} всего фото в архиве: {target_count}"
+            )
         if stats['photos_total'] > 0 and stats['photos_with_date'] == 0:
             logger.error(
                 "⚠️ НИ ОДНО фото не получило дату! Скорее всего Mail.ru "
@@ -273,6 +289,9 @@ class MailRuPublicClient:
                         continue
 
                     stats['photos_with_date'] += 1
+                    stats['by_month'][photo_date.month] = (
+                        stats['by_month'].get(photo_date.month, 0) + 1
+                    )
 
                     if photo_date.day == day and photo_date.month == month:
                         stats['photos_matched'] += 1
